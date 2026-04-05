@@ -8,10 +8,11 @@ AbletonOSC defaults:
 
 import asyncio
 import logging
+import socket
 from typing import Callable
 
-from pythonosc.dispatcher import Dispatcher
-from pythonosc.osc_server import AsyncIOOSCUDPServer
+from pythonosc.osc_message import OscMessage, ParseError
+from pythonosc.osc_bundle import OscBundle
 from pythonosc.udp_client import SimpleUDPClient
 
 from bridge.parser import find_current_indices, parse_markers
@@ -21,7 +22,37 @@ log = logging.getLogger(__name__)
 
 ABLETON_HOST = "127.0.0.1"
 SEND_PORT = 11000   # AbletonOSC listens here
-RECV_PORT = 11001   # we listen here for responses
+RECV_PORT = 11002   # we listen here for responses
+
+
+class _OSCProtocol(asyncio.DatagramProtocol):
+    """Minimal asyncio UDP protocol that dispatches OSC messages directly."""
+
+    def __init__(self, bridge: "AbletonBridge"):
+        self._bridge = bridge
+
+    def datagram_received(self, data: bytes, addr):
+        try:
+            if OscBundle.dgram_is_bundle(data):
+                bundle = OscBundle(data)
+                for msg in bundle:
+                    self._dispatch(msg)
+            else:
+                self._dispatch(OscMessage(data))
+        except ParseError as e:
+            log.warning("OSC parse error: %s", e)
+
+    def _dispatch(self, msg: OscMessage):
+        address = msg.address
+        params = list(msg)
+        if address == "/live/song/get/cue_points":
+            self._bridge._handle_cue_points(address, *params)
+        elif address in ("/live/song/get/beat", "/live/song/get/current_song_time"):
+            self._bridge._handle_beat(address, *params)
+        elif address == "/live/song/get/is_playing":
+            self._bridge._handle_is_playing(address, *params)
+        else:
+            log.debug("Unhandled OSC: %s %s", address, params)
 
 
 class AbletonBridge:
@@ -31,7 +62,6 @@ class AbletonBridge:
         self._on_state_change = on_state_change        # called when markers change
 
         self._client = SimpleUDPClient(ABLETON_HOST, SEND_PORT)
-        self._dispatcher = Dispatcher()
         self._transport = None
 
     # ------------------------------------------------------------------ #
@@ -39,28 +69,28 @@ class AbletonBridge:
     # ------------------------------------------------------------------ #
 
     async def start(self):
-        self._dispatcher.map("/live/song/get/cue_points", self._handle_cue_points)
-        self._dispatcher.map("/live/song/get/current_song_time", self._handle_position)
-        self._dispatcher.map("/live/song/get/is_playing", self._handle_is_playing)
-        self._dispatcher.set_default_handler(self._unhandled)
+        # Create socket manually with SO_REUSEADDR — prevents "port in use"
+        # errors when restarting the bridge quickly.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((ABLETON_HOST, RECV_PORT))
 
-        server = AsyncIOOSCUDPServer(
-            (ABLETON_HOST, RECV_PORT),
-            self._dispatcher,
-            asyncio.get_event_loop(),
+        loop = asyncio.get_event_loop()
+        self._transport, _ = await loop.create_datagram_endpoint(
+            lambda: _OSCProtocol(self),
+            sock=sock,
         )
-        self._transport, _ = await server.create_serve_endpoint()
         log.info("OSC listener started on %s:%d", ABLETON_HOST, RECV_PORT)
 
-        # Subscribe to continuous beat-level position updates
-        self._client.send_message("/live/song/start_listen/current_song_time", [])
+        # Subscribe to beat-level position updates (fires every new beat and on seek)
+        self._client.send_message("/live/song/start_listen/beat", [])
 
         # Pull initial state
         self.refresh()
 
     def stop(self):
         if self._transport:
-            self._client.send_message("/live/song/stop_listen/current_song_time", [])
+            self._client.send_message("/live/song/stop_listen/beat", [])
             self._transport.close()
 
     def refresh(self):
@@ -73,8 +103,9 @@ class AbletonBridge:
     # Commands → Ableton
     # ------------------------------------------------------------------ #
 
-    def jump_to_position(self, position: float):
-        self._client.send_message("/live/song/set/current_song_time", position)
+    def jump_to_cue(self, name: str):
+        """Jump to a cue point by name — respects Ableton's own quantization."""
+        self._client.send_message("/live/song/cue_point/jump", name)
 
     def play(self):
         self._client.send_message("/live/song/start_playing", [])
@@ -105,10 +136,13 @@ class AbletonBridge:
             i += 2
 
         self._state.songs = parse_markers(raw)
+        s_idx, sc_idx = find_current_indices(self._state.songs, self._state.current_position)
+        self._state.current_song_index = s_idx
+        self._state.current_section_index = sc_idx
         log.info("Loaded %d songs from %d cue points", len(self._state.songs), len(raw))
         self._on_state_change()
 
-    def _handle_position(self, address, *args):
+    def _handle_beat(self, address, *args):
         if not args:
             return
         self._state.current_position = float(args[0])
@@ -123,5 +157,3 @@ class AbletonBridge:
         self._state.is_playing = bool(args[0])
         self._on_position_update()
 
-    def _unhandled(self, address, *args):
-        log.debug("Unhandled OSC: %s %s", address, args)

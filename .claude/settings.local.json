@@ -3,7 +3,19 @@
     "allow": [
       "Bash(pip install:*)",
       "Bash(python -c \"from bridge.ableton import AbletonBridge; from bridge.parser import parse_markers, find_current_indices; from bridge.state import AppState; from bridge.server import app; print\\('All imports OK'\\)\")",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Read(//c/Users/ohno2/Documents/**)",
+      "Read(//c/Users/ohno2/Music/**)",
+      "Bash(cmd:*)",
+      "Bash(powershell:*)",
+      "Bash(python -m bridge.main)",
+      "Bash(curl -s http://localhost:8765/health)",
+      "Bash(pkill -f \"bridge.main\")",
+      "Bash(taskkill /F /IM python.exe /T)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill:*)",
+      "Bash(python -c \"from bridge.ableton import AbletonBridge; print\\('Import OK'\\)\")",
+      "Bash(python:*)"
     ]
   }
 }

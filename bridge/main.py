@@ -25,7 +25,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 HOST = "0.0.0.0"
-PORT = 8765
+PORT = 8766
 
 
 async def run():
