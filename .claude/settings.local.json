@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python -c \"from bridge.ableton import AbletonBridge; from bridge.parser import parse_markers, find_current_indices; from bridge.state import AppState; from bridge.server import app; print\\('All imports OK'\\)\")",
+      "Bash(python -c ':*)"
+    ]
+  }
+}
