@@ -22,7 +22,8 @@ log = logging.getLogger(__name__)
 
 ABLETON_HOST = "127.0.0.1"
 SEND_PORT = 11000   # AbletonOSC listens here
-RECV_PORT = 11002   # we listen here for responses
+RECV_PORT = 11001   # we listen here for responses (AbletonOSC default response port)
+CUE_POLL_INTERVAL = 2.0  # seconds between cue point polls
 
 
 class _OSCProtocol(asyncio.DatagramProtocol):
@@ -51,8 +52,10 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_beat(address, *params)
         elif address == "/live/song/get/is_playing":
             self._bridge._handle_is_playing(address, *params)
+        elif address == "/live/song/get/tempo":
+            self._bridge._handle_tempo(address, *params)
         else:
-            log.debug("Unhandled OSC: %s %s", address, params)
+            log.info("Unhandled OSC: %s %s", address, params)
 
 
 class AbletonBridge:
@@ -63,6 +66,8 @@ class AbletonBridge:
 
         self._client = SimpleUDPClient(ABLETON_HOST, SEND_PORT)
         self._transport = None
+        self._poll_task = None
+        self._last_raw_cues: list = []  # used to detect cue point changes
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -84,28 +89,43 @@ class AbletonBridge:
 
         # Subscribe to beat-level position updates (fires every new beat and on seek)
         self._client.send_message("/live/song/start_listen/beat", [])
+        # Subscribe to tempo and play state changes
+        self._client.send_message("/live/song/start_listen/tempo", [])
+        self._client.send_message("/live/song/start_listen/is_playing", [])
 
         # Pull initial state
         self.refresh()
 
+        # Start background cue point poll
+        self._poll_task = asyncio.get_event_loop().create_task(self._poll_cue_points())
+
     def stop(self):
+        if self._poll_task:
+            self._poll_task.cancel()
         if self._transport:
             self._client.send_message("/live/song/stop_listen/beat", [])
             self._transport.close()
+
+    async def _poll_cue_points(self):
+        """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds."""
+        while True:
+            await asyncio.sleep(CUE_POLL_INTERVAL)
+            self._client.send_message("/live/song/get/cue_points", [])
 
     def refresh(self):
         """Ask Ableton for a full state dump."""
         self._client.send_message("/live/song/get/cue_points", [])
         self._client.send_message("/live/song/get/is_playing", [])
         self._client.send_message("/live/song/get/current_song_time", [])
+        self._client.send_message("/live/song/get/tempo", [])
 
     # ------------------------------------------------------------------ #
     # Commands → Ableton
     # ------------------------------------------------------------------ #
 
-    def jump_to_cue(self, name: str):
-        """Jump to a cue point by name — respects Ableton's own quantization."""
-        self._client.send_message("/live/song/cue_point/jump", name)
+    def jump_to_cue_index(self, index: int):
+        """Jump to a cue point by index — unambiguous and respects launch quantization."""
+        self._client.send_message("/live/song/cue_point/jump", index)
 
     def play(self):
         self._client.send_message("/live/song/start_playing", [])
@@ -121,6 +141,7 @@ class AbletonBridge:
         """
         Args arrive as a flat interleaved list: name, time, name, time, ...
         Times are floats (beats from song start).
+        Only broadcasts a state change if the cue points have actually changed.
         """
         raw = []
         args = list(args)
@@ -135,11 +156,17 @@ class AbletonBridge:
             raw.append({"name": name, "position": time})
             i += 2
 
+        # Deduplicate — skip broadcast if nothing changed
+        raw_key = [(c["name"], c["position"]) for c in raw]
+        if raw_key == self._last_raw_cues:
+            return
+        self._last_raw_cues = raw_key
+
         self._state.songs = parse_markers(raw)
         s_idx, sc_idx = find_current_indices(self._state.songs, self._state.current_position)
         self._state.current_song_index = s_idx
         self._state.current_section_index = sc_idx
-        log.info("Loaded %d songs from %d cue points", len(self._state.songs), len(raw))
+        log.info("Cue points changed — loaded %d songs from %d cue points", len(self._state.songs), len(raw))
         self._on_state_change()
 
     def _handle_beat(self, address, *args):
@@ -155,5 +182,11 @@ class AbletonBridge:
         if not args:
             return
         self._state.is_playing = bool(args[0])
+        self._on_position_update()
+
+    def _handle_tempo(self, address, *args):
+        if not args:
+            return
+        self._state.tempo = float(args[0])
         self._on_position_update()
 

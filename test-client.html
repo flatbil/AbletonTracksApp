@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AbletonTracksApp — Test Client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 20px; }
+    h1 { font-size: 1.1rem; color: #aaa; margin-bottom: 16px; }
+
+    #status { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 20px; }
+    .connected    { background: #1a4a1a; color: #4caf50; }
+    .disconnected { background: #4a1a1a; color: #f44336; }
+    .connecting   { background: #3a3a1a; color: #ff9800; }
+
+    .section { margin-bottom: 20px; }
+    .section h2 { font-size: 0.8rem; text-transform: uppercase; color: #666; margin-bottom: 8px; letter-spacing: 1px; }
+
+    #transport { display: flex; gap: 8px; margin-bottom: 20px; }
+    button {
+      padding: 8px 18px; border: none; border-radius: 4px;
+      cursor: pointer; font-family: monospace; font-size: 0.9rem;
+    }
+    #btn-play    { background: #2e7d32; color: #fff; }
+    #btn-stop    { background: #b71c1c; color: #fff; }
+    #btn-refresh { background: #333; color: #ccc; }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.35; cursor: default; }
+
+    #position-bar { font-size: 1.4rem; color: #fff; margin-bottom: 4px; }
+    #playing-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: 0.75rem; margin-left: 8px; vertical-align: middle;
+    }
+    .playing { background: #2e7d32; color: #fff; }
+    .stopped  { background: #555;    color: #aaa; }
+
+    #songs-list { list-style: none; }
+    #songs-list li { margin-bottom: 14px; }
+    .song-title {
+      font-size: 0.95rem; color: #90caf9; margin-bottom: 4px;
+      padding: 2px 0;
+    }
+    .song-title.active { color: #fff; font-weight: bold; }
+    .sections { display: flex; flex-wrap: wrap; gap: 6px; }
+    .sec-btn {
+      padding: 5px 12px; border-radius: 3px;
+      background: #2a2a2a; border: 1px solid #444; color: #ccc;
+      font-size: 0.8rem; cursor: pointer;
+    }
+    .sec-btn:hover  { background: #333; border-color: #666; }
+    .sec-btn.active { background: #1565c0; border-color: #1e88e5; color: #fff; }
+
+    #log-box {
+      background: #111; border: 1px solid #333; border-radius: 4px;
+      padding: 10px; height: 160px; overflow-y: auto; font-size: 0.75rem; color: #888;
+    }
+    #log-box .entry { border-bottom: 1px solid #1e1e1e; padding: 2px 0; }
+    #log-box .entry.in  { color: #81c784; }
+    #log-box .entry.out { color: #64b5f6; }
+    #log-box .entry.sys { color: #aaa; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<h1>AbletonTracksApp — Browser Test Client</h1>
+<div id="status" class="disconnected">Disconnected</div>
+
+<div class="section">
+  <h2>Transport</h2>
+  <div id="transport">
+    <button id="btn-play"    disabled>▶ Play</button>
+    <button id="btn-stop"    disabled>■ Stop</button>
+    <button id="btn-refresh" disabled>↺ Refresh</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Position</h2>
+  <div id="position-bar">—<span id="playing-badge" class="stopped">STOPPED</span></div>
+</div>
+
+<div class="section">
+  <h2>Songs &amp; Sections</h2>
+  <ul id="songs-list"><li style="color:#555">No data yet</li></ul>
+</div>
+
+<div class="section">
+  <h2>Log</h2>
+  <div id="log-box"></div>
+</div>
+
+<script>
+  const WS_URL = "ws://localhost:8766/ws";
+
+  const statusEl   = document.getElementById("status");
+  const posEl      = document.getElementById("position-bar");
+  const badgeEl    = document.getElementById("playing-badge");
+  const songsEl    = document.getElementById("songs-list");
+  const logEl      = document.getElementById("log-box");
+  const btnPlay    = document.getElementById("btn-play");
+  const btnStop    = document.getElementById("btn-stop");
+  const btnRefresh = document.getElementById("btn-refresh");
+
+  let ws = null;
+  let state = { songs: [], current_song_index: -1, current_section_index: -1, position: 0, is_playing: false };
+
+  function log(text, kind = "sys") {
+    const d = document.createElement("div");
+    d.className = "entry " + kind;
+    d.textContent = new Date().toLocaleTimeString() + "  " + text;
+    logEl.prepend(d);
+  }
+
+  function setConnected(connected) {
+    const btns = [btnPlay, btnStop, btnRefresh];
+    btns.forEach(b => b.disabled = !connected);
+    statusEl.textContent = connected ? "Connected — ws://localhost:8766/ws" : "Disconnected";
+    statusEl.className   = connected ? "connected" : "disconnected";
+  }
+
+  function send(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+      log(JSON.stringify(msg), "out");
+    }
+  }
+
+  function renderSongs() {
+    if (!state.songs || state.songs.length === 0) {
+      songsEl.innerHTML = '<li style="color:#555">No cue points received from Ableton</li>';
+      return;
+    }
+    songsEl.innerHTML = "";
+    state.songs.forEach((song, si) => {
+      const li = document.createElement("li");
+      const title = document.createElement("div");
+      title.className = "song-title" + (si === state.current_song_index ? " active" : "");
+      title.textContent = song.name || ("Song " + (si + 1));
+      li.appendChild(title);
+
+      const secs = document.createElement("div");
+      secs.className = "sections";
+      (song.sections || []).forEach((sec, sci) => {
+        const btn = document.createElement("button");
+        btn.className = "sec-btn" + (si === state.current_song_index && sci === state.current_section_index ? " active" : "");
+        btn.textContent = sec.name || ("Section " + (sci + 1));
+        btn.onclick = () => send({ type: "jump", song_index: si, section_index: sci });
+        secs.appendChild(btn);
+      });
+      li.appendChild(secs);
+      songsEl.appendChild(li);
+    });
+  }
+
+  function applyMessage(msg) {
+    if (msg.songs !== undefined)                   state.songs = msg.songs;
+    if (msg.position !== undefined)                state.position = msg.position;
+    if (msg.is_playing !== undefined)              state.is_playing = msg.is_playing;
+    if (msg.current_song_index !== undefined)      state.current_song_index = msg.current_song_index;
+    if (msg.current_section_index !== undefined)   state.current_section_index = msg.current_section_index;
+
+    posEl.innerHTML = state.position.toFixed(2) + " beats";
+    const badge = document.createElement("span");
+    badge.id = "playing-badge";
+    badge.className = state.is_playing ? "playing" : "stopped";
+    badge.textContent = state.is_playing ? "PLAYING" : "STOPPED";
+    posEl.appendChild(badge);
+
+    if (msg.type === "state") renderSongs();
+    else renderSongs(); // re-render to update active highlights
+  }
+
+  function connect() {
+    statusEl.textContent = "Connecting…";
+    statusEl.className = "connecting";
+    log("Connecting to " + WS_URL);
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      setConnected(true);
+      log("Connected");
+    };
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      log(e.data, "in");
+      applyMessage(msg);
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      log("Disconnected — retrying in 3s");
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {
+      log("WebSocket error");
+    };
+  }
+
+  btnPlay.onclick    = () => send({ type: "transport", action: "play" });
+  btnStop.onclick    = () => send({ type: "transport", action: "stop" });
+  btnRefresh.onclick = () => send({ type: "refresh" });
+
+  connect();
+</script>
+</body>
+</html>

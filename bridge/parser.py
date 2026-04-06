@@ -23,30 +23,47 @@ def parse_markers(cue_points: list[dict]) -> list[dict]:
                 "name": "Amazing Grace",
                 "position": 0.0,
                 "sections": [
-                    {"name": "Verse 1", "position": 0.0},
-                    {"name": "Chorus",  "position": 8.0},
+                    {"name": "Start",  "position": 0.0, "cue_index": 0},
+                    {"name": "Verse 1","position": 8.0, "cue_index": 1},
+                    {"name": "Chorus", "position": 16.0,"cue_index": 2},
                 ]
             },
             ...
         ]
+
+    cue_index is the flat index into Ableton's cue_points list, used for
+    unambiguous index-based jumping (respects launch quantization).
     """
     songs = []
     current_song = None
 
-    for cue in sorted(cue_points, key=lambda c: c["position"]):
+    # Sort by position, with song headers before sections at the same position
+    def sort_key(c):
+        is_header = 0 if SONG_HEADER.match(c["name"].strip()) else 1
+        return (float(c["position"]), is_header)
+
+    sorted_cues = sorted(cue_points, key=sort_key)
+
+    # cue_index must match AbletonOSC's song.cue_points order (the ORIGINAL
+    # unsorted order Ableton sends), NOT our display-sorted order.
+    # Sorting only affects display/detection — jumping uses Ableton's own list.
+    original_index = {(c["name"].strip(), float(c["position"])): i for i, c in enumerate(cue_points)}
+
+    for cue in sorted_cues:
         name = cue["name"].strip()
         position = float(cue["position"])
+        cue_index = original_index[(name, position)]
 
         match = SONG_HEADER.match(name)
         if match:
             current_song = {
                 "name": match.group(1),
                 "position": position,
-                "sections": [],
+                "sections": [{"name": "Start", "position": position, "cue_index": cue_index}],
             }
             songs.append(current_song)
         elif current_song is not None:
-            current_song["sections"].append({"name": name, "position": position})
+            current_song["sections"].append({"name": name, "position": position, "cue_index": cue_index})
 
     return songs
 

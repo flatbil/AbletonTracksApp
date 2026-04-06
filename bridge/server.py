@@ -152,7 +152,8 @@ async def websocket_endpoint(ws: WebSocket):
 def _handle_jump(song_idx: int, section_idx: int):
     try:
         section = _state.songs[song_idx]["sections"][section_idx]
-        log.info("Jumping to cue '%s'", section["name"])
-        _ableton.jump_to_cue(section["name"])
+        cue_index = int(section["cue_index"])
+        log.info("Jumping to cue index %d (song=%d section=%d)", cue_index, song_idx, section_idx)
+        _ableton.jump_to_cue_index(cue_index)
     except (IndexError, KeyError, TypeError) as e:
         log.error("Jump failed: %s", e)
