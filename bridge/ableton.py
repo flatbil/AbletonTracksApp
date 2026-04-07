@@ -54,6 +54,8 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_is_playing(address, *params)
         elif address == "/live/song/get/tempo":
             self._bridge._handle_tempo(address, *params)
+        elif address == "/live/song/get/signature_numerator":
+            self._bridge._handle_signature_numerator(address, *params)
         else:
             log.info("Unhandled OSC: %s %s", address, params)
 
@@ -68,6 +70,7 @@ class AbletonBridge:
         self._transport = None
         self._poll_task = None
         self._last_raw_cues: list = []  # used to detect cue point changes
+        self._last_section: tuple[int, int] = (-1, -1)  # for instant section-change detection
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -89,9 +92,14 @@ class AbletonBridge:
 
         # Subscribe to beat-level position updates (fires every new beat and on seek)
         self._client.send_message("/live/song/start_listen/beat", [])
-        # Subscribe to tempo and play state changes
+        # Subscribe to continuous position updates for instant section-change detection.
+        # Fires on every Live API tick (~60 Hz) — we only broadcast from this when the
+        # section index actually changes, so the WebSocket isn't flooded.
+        self._client.send_message("/live/song/start_listen/current_song_time", [])
+        # Subscribe to tempo, play state, and time signature changes
         self._client.send_message("/live/song/start_listen/tempo", [])
         self._client.send_message("/live/song/start_listen/is_playing", [])
+        self._client.send_message("/live/song/start_listen/signature_numerator", [])
 
         # Pull initial state
         self.refresh()
@@ -104,13 +112,18 @@ class AbletonBridge:
             self._poll_task.cancel()
         if self._transport:
             self._client.send_message("/live/song/stop_listen/beat", [])
+            self._client.send_message("/live/song/stop_listen/current_song_time", [])
+            self._client.send_message("/live/song/stop_listen/signature_numerator", [])
             self._transport.close()
 
     async def _poll_cue_points(self):
-        """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds."""
+        """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds.
+        Also refreshes position and play state so set switches are detected cleanly."""
         while True:
             await asyncio.sleep(CUE_POLL_INTERVAL)
             self._client.send_message("/live/song/get/cue_points", [])
+            self._client.send_message("/live/song/get/current_song_time", [])
+            self._client.send_message("/live/song/get/is_playing", [])
 
     def refresh(self):
         """Ask Ableton for a full state dump."""
@@ -118,6 +131,7 @@ class AbletonBridge:
         self._client.send_message("/live/song/get/is_playing", [])
         self._client.send_message("/live/song/get/current_song_time", [])
         self._client.send_message("/live/song/get/tempo", [])
+        self._client.send_message("/live/song/get/signature_numerator", [])
 
     # ------------------------------------------------------------------ #
     # Commands → Ableton
@@ -172,11 +186,29 @@ class AbletonBridge:
     def _handle_beat(self, address, *args):
         if not args:
             return
-        self._state.current_position = float(args[0])
+        new_position = float(args[0])
+        # A large backward jump likely means a new set was loaded — clear cue cache
+        if new_position < self._state.current_position - 8:
+            log.info("Position jumped back (%.2f → %.2f) — clearing cue cache for set reload", self._state.current_position, new_position)
+            self._last_raw_cues = []
+        self._state.current_position = new_position
         s_idx, sc_idx = find_current_indices(self._state.songs, self._state.current_position)
         self._state.current_song_index = s_idx
         self._state.current_section_index = sc_idx
-        self._on_position_update()
+
+        section_changed = (s_idx, sc_idx) != self._last_section
+        is_beat_boundary = address == "/live/song/get/beat"
+
+        if section_changed:
+            # Section changed — broadcast immediately regardless of source
+            log.info("Section changed to song=%d section=%d at position=%.2f", s_idx, sc_idx, new_position)
+            self._last_section = (s_idx, sc_idx)
+            self._on_position_update()
+        elif is_beat_boundary:
+            # No section change but this is a beat tick — send position update for
+            # progress-bar anchoring on the iPad
+            self._on_position_update()
+        # else: sub-beat current_song_time update with no section change — drop it
 
     def _handle_is_playing(self, address, *args):
         if not args:
@@ -188,5 +220,11 @@ class AbletonBridge:
         if not args:
             return
         self._state.tempo = float(args[0])
+        self._on_position_update()
+
+    def _handle_signature_numerator(self, address, *args):
+        if not args:
+            return
+        self._state.time_signature_numerator = int(args[0])
         self._on_position_update()
 
