@@ -112,7 +112,8 @@ def health():
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
-        # Send full state immediately on connect
+        # Refresh from Ableton then send full state so the client gets current position
+        _ableton.refresh()
         await manager.send(ws, _state.full_snapshot())
 
         async for raw in ws.iter_text():
@@ -139,6 +140,13 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg_type == "refresh":
                 _ableton.refresh()
                 await manager.send(ws, _state.full_snapshot())
+
+            elif msg_type == "generate_cues":
+                track_name = msg.get("track_name", "Cues")
+                log.info("Generating cues from track '%s'", track_name)
+                asyncio.get_event_loop().create_task(
+                    _ableton.generate_cues_from_track(track_name)
+                )
 
             else:
                 log.warning("Unknown message type: %s", msg_type)

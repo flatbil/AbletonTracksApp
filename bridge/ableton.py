@@ -141,6 +141,15 @@ class AbletonBridge:
         """Jump to a cue point by index — unambiguous and respects launch quantization."""
         self._client.send_message("/live/song/cue_point/jump", index)
 
+    async def generate_cues_from_track(self, track_name: str = "Cues"):
+        """Ask Ableton to create cue points from arrangement clips on track_name,
+        then force a cue refresh so the new markers reach the iPad."""
+        self._client.send_message("/live/song/generate_cues_from_track", [track_name])
+        # Give Ableton time to create the cues before we poll
+        await asyncio.sleep(1.0)
+        self._last_raw_cues = []   # force cache miss so the refresh broadcasts
+        self.refresh()
+
     def play(self):
         self._client.send_message("/live/song/start_playing", [])
 

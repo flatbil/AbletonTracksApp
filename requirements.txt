@@ -2,3 +2,4 @@ python-osc==1.8.3
 fastapi==0.115.5
 uvicorn[standard]==0.32.0
 websockets==13.1
+zeroconf==0.136.2

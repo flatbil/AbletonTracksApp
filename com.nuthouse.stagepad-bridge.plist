@@ -7,21 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>-m</string>
-        <string>bridge.main</string>
+        <string>/bin/bash</string>
+        <string>SCRIPTS_DIR_PLACEHOLDER/start-stagepad-bridge.sh</string>
     </array>
-
-    <key>WorkingDirectory</key>
-    <string>BRIDGE_DIR_PLACEHOLDER</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PYTHONPATH</key>
-        <string>BRIDGE_DIR_PLACEHOLDER</string>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
-    </dict>
 
     <key>KeepAlive</key>
     <true/>

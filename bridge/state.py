@@ -14,6 +14,7 @@ class AppState:
     current_song_index: int = -1
     current_section_index: int = -1
     tempo: float = 0.0
+    time_signature_numerator: int = 4
 
     def position_snapshot(self) -> dict:
         """Lightweight message sent ~every beat."""
@@ -24,6 +25,7 @@ class AppState:
             "current_song_index": self.current_song_index,
             "current_section_index": self.current_section_index,
             "tempo": self.tempo,
+            "time_signature_numerator": self.time_signature_numerator,
         }
 
     def full_snapshot(self) -> dict:
@@ -36,4 +38,5 @@ class AppState:
             "current_song_index": self.current_song_index,
             "current_section_index": self.current_section_index,
             "tempo": self.tempo,
+            "time_signature_numerator": self.time_signature_numerator,
         }
