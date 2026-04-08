@@ -20,8 +20,9 @@ import asyncio
 import json
 import logging
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from bridge.state import AppState
 
@@ -106,6 +107,35 @@ def on_position_update():
 @app.get("/health")
 def health():
     return {"status": "ok", "songs": len(_state.songs) if _state else 0}
+
+
+@app.post("/apply_analysis")
+async def apply_analysis(request: Request):
+    """
+    Receives analysis results from the analyze_guide.command script and applies
+    them to Ableton. Called from Terminal — no TCC restrictions.
+
+    Body: {"bpm": float, "sections": [{"name": str, "beat": float}, ...]}
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    bpm = data.get("bpm")
+    sections = data.get("sections", [])
+    if not bpm or not sections:
+        return JSONResponse({"error": "missing bpm or sections"}, status_code=400)
+
+    track_name = data.get("track_name", "Cues")
+    log.info("apply_analysis: BPM=%.1f, %d sections, track='%s'", bpm, len(sections), track_name)
+
+    async def _run():
+        clip_start = await _ableton.apply_analysis(bpm, sections, track_name)
+        log.info("apply_analysis: clip was at beat %.2f in arrangement", clip_start)
+
+    asyncio.get_event_loop().create_task(_run())
+    return {"status": "ok", "bpm": bpm, "section_count": len(sections)}
 
 
 @app.websocket("/ws")

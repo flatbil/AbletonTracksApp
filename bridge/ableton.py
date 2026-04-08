@@ -73,7 +73,8 @@ class AbletonBridge:
         self._poll_task = None
         self._last_raw_cues: list = []  # used to detect cue point changes
         self._last_section: tuple[int, int] = (-1, -1)  # for instant section-change detection
-        self._pending_clip_path: asyncio.Future | None = None  # for analyze_guide_track
+        self._pending_clip_path = None   # asyncio.Future, set during analyze_guide_track
+        self._pending_cue_points = None  # asyncio.Future, set during apply_analysis
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -168,7 +169,7 @@ class AbletonBridge:
         self._pending_clip_path = loop.create_future()
         self._client.send_message("/live/song/get/guide_clip_path", [track_name])
         try:
-            clip_path = await asyncio.wait_for(self._pending_clip_path, timeout=5.0)
+            clip_path, _start_beat = await asyncio.wait_for(self._pending_clip_path, timeout=5.0)
         except asyncio.TimeoutError:
             log.error("analyze_guide_track: timed out waiting for clip path from Ableton")
             return {}
@@ -215,11 +216,33 @@ class AbletonBridge:
         )
         return analysis
 
+    async def apply_analysis(self, bpm: float, sections: list, track_name: str = "Cues"):
+        """
+        Apply pre-computed analysis results to Ableton.
+        Delegates to the create_cues_from_data OSC endpoint which handles
+        creation and naming by beat position (not index), so ordering is correct.
+        """
+        # Build flat OSC params: __tempo__, bpm, name, beat, name, beat, ...
+        params: list = ["__tempo__", float(bpm)]
+        for s in sections:
+            beat = float(s.get("time", 0.0)) * bpm / 60.0
+            params.append(s["name"])
+            params.append(round(beat, 3))
+
+        log.info("apply_analysis: sending %d cues at BPM=%.1f", len(sections), bpm)
+        self._client.send_message("/live/song/create_cues_from_data", params)
+        await asyncio.sleep(1.5)
+
+        self._last_raw_cues = []
+        self.refresh()
+        return 0.0
+
     def _handle_guide_clip_path(self, address, *args):
         """OSC response handler for /live/song/get/guide_clip_path."""
-        path = str(args[0]) if args else ""
+        path = str(args[0]) if len(args) > 0 else ""
+        start_beat = float(args[1]) if len(args) > 1 else 0.0
         if self._pending_clip_path and not self._pending_clip_path.done():
-            self._pending_clip_path.set_result(path)
+            self._pending_clip_path.set_result((path, start_beat))
 
     def play(self):
         self._client.send_message("/live/song/start_playing", [])
@@ -232,6 +255,10 @@ class AbletonBridge:
     # ------------------------------------------------------------------ #
 
     def _handle_cue_points(self, address, *args):
+        # If apply_analysis is waiting for the cue list, resolve its future first
+        if self._pending_cue_points and not self._pending_cue_points.done():
+            self._pending_cue_points.set_result(list(args))
+            return
         """
         Args arrive as a flat interleaved list: name, time, name, time, ...
         Times are floats (beats from song start).
