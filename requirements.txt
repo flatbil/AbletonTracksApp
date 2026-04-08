@@ -3,3 +3,10 @@ fastapi==0.115.5
 uvicorn[standard]==0.32.0
 websockets==13.1
 zeroconf==0.136.2
+
+# Guide track analysis (install separately — large dependencies)
+# pip install openai-whisper librosa soundfile
+# openai-whisper pulls in PyTorch; first run downloads the Whisper model (~74MB for 'base')
+openai-whisper
+librosa
+soundfile

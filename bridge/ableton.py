@@ -48,6 +48,8 @@ class _OSCProtocol(asyncio.DatagramProtocol):
         params = list(msg)
         if address == "/live/song/get/cue_points":
             self._bridge._handle_cue_points(address, *params)
+        elif address == "/live/song/get/guide_clip_path":
+            self._bridge._handle_guide_clip_path(address, *params)
         elif address in ("/live/song/get/beat", "/live/song/get/current_song_time"):
             self._bridge._handle_beat(address, *params)
         elif address == "/live/song/get/is_playing":
@@ -71,6 +73,7 @@ class AbletonBridge:
         self._poll_task = None
         self._last_raw_cues: list = []  # used to detect cue point changes
         self._last_section: tuple[int, int] = (-1, -1)  # for instant section-change detection
+        self._pending_clip_path: asyncio.Future | None = None  # for analyze_guide_track
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -149,6 +152,74 @@ class AbletonBridge:
         await asyncio.sleep(1.0)
         self._last_raw_cues = []   # force cache miss so the refresh broadcasts
         self.refresh()
+
+    async def analyze_guide_track(self, track_name: str = "Guide", model_size: str = "base") -> dict:
+        """
+        Full pipeline:
+          1. Ask Ableton for the file path of the first clip on track_name
+          2. Run BPM detection + Whisper transcription on that file
+          3. Set Ableton's tempo and create cue markers from the results
+          4. Trigger a cue refresh so the iPad sees the new markers
+
+        Returns the analysis dict {"bpm": float, "sections": [...]} or {} on failure.
+        """
+        # Step 1: get file path from Ableton via OSC
+        loop = asyncio.get_event_loop()
+        self._pending_clip_path = loop.create_future()
+        self._client.send_message("/live/song/get/guide_clip_path", [track_name])
+        try:
+            clip_path = await asyncio.wait_for(self._pending_clip_path, timeout=5.0)
+        except asyncio.TimeoutError:
+            log.error("analyze_guide_track: timed out waiting for clip path from Ableton")
+            return {}
+        finally:
+            self._pending_clip_path = None
+
+        if not clip_path:
+            log.error("analyze_guide_track: Ableton returned empty path — is a clip on the '%s' track?", track_name)
+            return {}
+
+        log.info("analyze_guide_track: analyzing '%s'", clip_path)
+
+        # Step 2: run analysis (CPU-bound — run in executor so we don't block the event loop)
+        try:
+            from bridge.analyzer import analyze_guide
+            analysis = await loop.run_in_executor(
+                None, lambda: analyze_guide(clip_path, model_size)
+            )
+        except ImportError as e:
+            log.error("analyze_guide_track: missing dependency — run: pip install openai-whisper librosa soundfile\n  %s", e)
+            return {}
+        except Exception as e:
+            log.error("analyze_guide_track: analysis failed: %s", e)
+            return {}
+
+        # Step 3: send tempo + cue markers to Ableton
+        if analysis.get("sections"):
+            # Build flat params: "__tempo__", bpm, name, beat, name, beat, ...
+            params: list = ["__tempo__", analysis["bpm"]]
+            for section in analysis["sections"]:
+                params.append(section["name"])
+                params.append(section["beat"])
+            self._client.send_message("/live/song/create_cues_from_data", params)
+            await asyncio.sleep(1.0)
+
+        # Step 4: refresh cue cache so iPad gets updated markers
+        self._last_raw_cues = []
+        self.refresh()
+
+        log.info(
+            "analyze_guide_track: done — BPM=%.1f, %d sections",
+            analysis.get("bpm", 0),
+            len(analysis.get("sections", [])),
+        )
+        return analysis
+
+    def _handle_guide_clip_path(self, address, *args):
+        """OSC response handler for /live/song/get/guide_clip_path."""
+        path = str(args[0]) if args else ""
+        if self._pending_clip_path and not self._pending_clip_path.done():
+            self._pending_clip_path.set_result(path)
 
     def play(self):
         self._client.send_message("/live/song/start_playing", [])

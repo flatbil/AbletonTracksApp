@@ -148,6 +148,22 @@ async def websocket_endpoint(ws: WebSocket):
                     _ableton.generate_cues_from_track(track_name)
                 )
 
+            elif msg_type == "analyze_guide":
+                track_name = msg.get("track_name", "Guide")
+                model_size = msg.get("model_size", "base")
+                log.info("Analyzing guide track '%s' with Whisper model '%s'", track_name, model_size)
+                async def _run_analysis():
+                    result = await _ableton.analyze_guide_track(track_name, model_size)
+                    # Send result back to this client so the app can show completion
+                    status = "done" if result.get("sections") else "error"
+                    await manager.send(ws, {
+                        "type": "analyze_guide_result",
+                        "status": status,
+                        "bpm": result.get("bpm"),
+                        "section_count": len(result.get("sections", [])),
+                    })
+                asyncio.get_event_loop().create_task(_run_analysis())
+
             else:
                 log.warning("Unknown message type: %s", msg_type)
 
