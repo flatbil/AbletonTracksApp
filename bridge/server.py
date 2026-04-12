@@ -109,6 +109,26 @@ def health():
     return {"status": "ok", "songs": len(_state.songs) if _state else 0}
 
 
+@app.get("/guide_clip_path")
+async def guide_clip_path(track: str = "Guide"):
+    """Ask Ableton for the file path and arrangement position of the first clip on the named track."""
+    loop = asyncio.get_running_loop()
+    _ableton._pending_clip_path = loop.create_future()
+    _ableton._client.send_message("/live/song/get/guide_clip_path", [track])
+    try:
+        path, start_beat = await asyncio.wait_for(_ableton._pending_clip_path, timeout=5.0)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"error": f"timeout — Ableton did not respond. Make sure AbletonOSC is loaded and Ableton has been fully restarted since last updating AbletonOSC."},
+            status_code=504,
+        )
+    finally:
+        _ableton._pending_clip_path = None
+    if not path:
+        return JSONResponse({"error": f"no clip found on track '{track}'"}, status_code=404)
+    return {"path": path, "start_beat": start_beat}
+
+
 @app.post("/apply_analysis")
 async def apply_analysis(request: Request):
     """
@@ -128,11 +148,12 @@ async def apply_analysis(request: Request):
         return JSONResponse({"error": "missing bpm or sections"}, status_code=400)
 
     track_name = data.get("track_name", "Cues")
-    log.info("apply_analysis: BPM=%.1f, %d sections, track='%s'", bpm, len(sections), track_name)
+    clip_start_beat = float(data.get("clip_start_beat", 0.0))
+    log.info("apply_analysis: BPM=%.1f, %d sections, track='%s', clip_start_beat=%.2f",
+             bpm, len(sections), track_name, clip_start_beat)
 
     async def _run():
-        clip_start = await _ableton.apply_analysis(bpm, sections, track_name)
-        log.info("apply_analysis: clip was at beat %.2f in arrangement", clip_start)
+        await _ableton.apply_analysis(bpm, sections, track_name, clip_start_beat)
 
     asyncio.get_event_loop().create_task(_run())
     return {"status": "ok", "bpm": bpm, "section_count": len(sections)}
@@ -207,7 +228,32 @@ def _handle_jump(song_idx: int, section_idx: int):
     try:
         section = _state.songs[song_idx]["sections"][section_idx]
         cue_index = int(section["cue_index"])
-        log.info("Jumping to cue index %d (song=%d section=%d)", cue_index, song_idx, section_idx)
-        _ableton.jump_to_cue_index(cue_index)
     except (IndexError, KeyError, TypeError) as e:
         log.error("Jump failed: %s", e)
+        return
+
+    if _state.is_playing and _state.tempo > 0:
+        asyncio.get_event_loop().create_task(_jump_on_bar(cue_index, song_idx, section_idx))
+    else:
+        log.info("Jumping immediately to cue %d (song=%d section=%d)", cue_index, song_idx, section_idx)
+        _ableton.jump_to_cue_index(cue_index)
+
+
+async def _jump_on_bar(cue_index: int, song_idx: int, section_idx: int):
+    """Wait until the next bar boundary, then send the jump to Ableton."""
+    num = _state.time_signature_numerator or 4
+    pos = _state.current_position
+    beats_into_bar = pos % num
+    beats_until_next = num - beats_into_bar
+    # If we're already within 0.1 beats of the bar, skip to the following one
+    # so the jump doesn't fire almost immediately and feel unquantized.
+    if beats_until_next < 0.1:
+        beats_until_next += num
+    seconds = beats_until_next * 60.0 / _state.tempo
+    log.info(
+        "Jump queued to cue %d (song=%d section=%d): %.2f beats / %.2fs to next bar",
+        cue_index, song_idx, section_idx, beats_until_next, seconds,
+    )
+    await asyncio.sleep(seconds)
+    log.info("Jump firing: cue %d", cue_index)
+    _ableton.jump_to_cue_index(cue_index)
