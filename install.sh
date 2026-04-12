@@ -10,13 +10,8 @@ PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 echo "=== AbletonTracksApp Installer ==="
 echo ""
 
-# ── 1. Ensure submodule is present ───────────────────────────────────────────
-echo "[1/4] Checking AbletonOSC submodule..."
-git -C "$SCRIPT_DIR" submodule update --init --recursive
-echo "      OK"
-
-# ── 2. Install Python dependencies ───────────────────────────────────────────
-echo "[2/4] Installing Python dependencies..."
+# ── 1. Install Python dependencies ───────────────────────────────────────────
+echo "[1/4] Installing Python dependencies..."
 if command -v pip3 &>/dev/null; then
     pip3 install -r "$SCRIPT_DIR/requirements.txt"
 elif command -v pip &>/dev/null; then
@@ -31,7 +26,7 @@ REMOTE_SCRIPTS_DIR="$HOME/Music/Ableton/User Library/Remote Scripts"
 DEST="$REMOTE_SCRIPTS_DIR/AbletonOSC"
 SRC="$SCRIPT_DIR/AbletonOSC"
 
-echo "[3/4] Installing AbletonOSC remote script..."
+echo "[3/3] Installing AbletonOSC remote script..."
 mkdir -p "$REMOTE_SCRIPTS_DIR"
 
 if [ -d "$DEST" ]; then
@@ -49,8 +44,8 @@ else
     echo "      Installed to: $DEST"
 fi
 
-# ── 4. Install bridge as a login service (auto-starts & auto-restarts) ────────
-echo "[4/4] Installing bridge as a background login service..."
+# ── 3. Install bridge as a login service (auto-starts & auto-restarts) ───────
+echo "[3/3] Installing bridge as a background login service..."
 
 LOG_DIR="$HOME/Library/Logs/StagePadBridge"
 SCRIPTS_DIR="$HOME/Library/Scripts"

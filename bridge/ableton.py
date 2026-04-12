@@ -122,12 +122,15 @@ class AbletonBridge:
 
     async def _poll_cue_points(self):
         """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds.
-        Also refreshes position and play state so set switches are detected cleanly."""
+        Also refreshes position, play state, and tempo so that changes survive
+        project reloads or AbletonOSC restarts (which silently drop listeners)."""
         while True:
             await asyncio.sleep(CUE_POLL_INTERVAL)
             self._client.send_message("/live/song/get/cue_points", [])
             self._client.send_message("/live/song/get/current_song_time", [])
             self._client.send_message("/live/song/get/is_playing", [])
+            self._client.send_message("/live/song/get/tempo", [])
+            self._client.send_message("/live/song/get/signature_numerator", [])
 
     def refresh(self):
         """Ask Ableton for a full state dump."""
@@ -216,26 +219,27 @@ class AbletonBridge:
         )
         return analysis
 
-    async def apply_analysis(self, bpm: float, sections: list, track_name: str = "Cues"):
+    async def apply_analysis(self, bpm: float, sections: list, track_name: str = "Cues",
+                             clip_start_beat: float = 0.0):
         """
-        Apply pre-computed analysis results to Ableton.
-        Delegates to the create_cues_from_data OSC endpoint which handles
-        creation and naming by beat position (not index), so ordering is correct.
+        Send all cue data to Ableton in one OSC message.
+        Ableton's replace_all_cues handler does everything atomically:
+        deletes old cues, sets tempo, creates and names new cues.
         """
-        # Build flat OSC params: __tempo__, bpm, name, beat, name, beat, ...
-        params: list = ["__tempo__", float(bpm)]
+        # Params: bpm, clip_start_beat, name0, time0s, name1, time1s, ...
+        params: list = [float(bpm), float(clip_start_beat)]
         for s in sections:
-            beat = float(s.get("time", 0.0)) * bpm / 60.0
             params.append(s["name"])
-            params.append(round(beat, 3))
+            params.append(float(s.get("time", 0.0)))
 
-        log.info("apply_analysis: sending %d cues at BPM=%.1f", len(sections), bpm)
-        self._client.send_message("/live/song/create_cues_from_data", params)
+        log.info("apply_analysis: sending %d sections at BPM=%.1f, clip_start_beat=%.2f",
+                 len(sections), bpm, clip_start_beat)
+        self._client.send_message("/live/song/replace_all_cues", params)
+
+        # Give Ableton time to process before we refresh the cue cache
         await asyncio.sleep(1.5)
-
         self._last_raw_cues = []
         self.refresh()
-        return 0.0
 
     def _handle_guide_clip_path(self, address, *args):
         """OSC response handler for /live/song/get/guide_clip_path."""
@@ -255,10 +259,6 @@ class AbletonBridge:
     # ------------------------------------------------------------------ #
 
     def _handle_cue_points(self, address, *args):
-        # If apply_analysis is waiting for the cue list, resolve its future first
-        if self._pending_cue_points and not self._pending_cue_points.done():
-            self._pending_cue_points.set_result(list(args))
-            return
         """
         Args arrive as a flat interleaved list: name, time, name, time, ...
         Times are floats (beats from song start).
@@ -293,6 +293,9 @@ class AbletonBridge:
     def _handle_beat(self, address, *args):
         if not args:
             return
+        # Refresh tempo on every beat so per-song BPM changes are always current
+        if address == "/live/song/get/beat":
+            self._client.send_message("/live/song/get/tempo", [])
         new_position = float(args[0])
         # A large backward jump likely means a new set was loaded — clear cue cache
         if new_position < self._state.current_position - 8:
