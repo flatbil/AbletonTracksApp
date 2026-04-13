@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>StagePad Bridge</title>
+    <background file="background.png" alignment="bottomleft" scaling="proportional"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+    <domains enable_localSystem="true"/>
+    <pkg-ref id="com.nuthouse.stagepad-bridge"/>
+    <choices-outline>
+        <line choice="com.nuthouse.stagepad-bridge"/>
+    </choices-outline>
+    <choice id="com.nuthouse.stagepad-bridge" title="StagePad Bridge">
+        <pkg-ref id="com.nuthouse.stagepad-bridge"/>
+    </choice>
+    <pkg-ref id="com.nuthouse.stagepad-bridge"
+             version="1.0"
+             onConclusion="none">StagePadBridge_component.pkg</pkg-ref>
+</installer-gui-script>

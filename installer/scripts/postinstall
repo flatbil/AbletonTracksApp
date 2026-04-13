@@ -1,0 +1,84 @@
+#!/bin/bash
+# Postinstall: wire up AbletonOSC and the launchd agent for the current user.
+# This script runs as root. We detect the logged-in user and set everything
+# up in their home directory.
+
+set -e
+
+PLIST_NAME="com.nuthouse.stagepad-bridge"
+BRIDGE_SRC="/Library/Application Support/StagePadBridge"
+BINARY="$BRIDGE_SRC/StagePadBridge/StagePadBridge"
+
+# ── Detect the logged-in user ─────────────────────────────────────────────────
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+if [ -z "$CURRENT_USER" ] || [ "$CURRENT_USER" = "root" ]; then
+    CURRENT_USER=$(defaults read /Library/Preferences/com.apple.loginwindow \
+                   lastUserName 2>/dev/null || echo "")
+fi
+if [ -z "$CURRENT_USER" ]; then
+    echo "ERROR: Could not determine the logged-in user." >&2
+    exit 1
+fi
+
+USER_UID=$(id -u "$CURRENT_USER")
+USER_HOME=$(dscl . -read "/Users/$CURRENT_USER" NFSHomeDirectory | awk '{print $2}')
+
+ABLETON_SCRIPTS="$USER_HOME/Music/Ableton/User Library/Remote Scripts"
+LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
+LOG_DIR="$USER_HOME/Library/Logs/StagePadBridge"
+PLIST_PATH="$LAUNCH_AGENTS/$PLIST_NAME.plist"
+
+echo "Installing StagePad Bridge for user: $CURRENT_USER"
+
+# ── Create directories ────────────────────────────────────────────────────────
+mkdir -p "$ABLETON_SCRIPTS" "$LAUNCH_AGENTS" "$LOG_DIR"
+chown "$CURRENT_USER" "$LOG_DIR" "$LAUNCH_AGENTS"
+
+# ── Install AbletonOSC remote script ─────────────────────────────────────────
+if [ -d "$BRIDGE_SRC/AbletonOSC" ]; then
+    rm -rf "$ABLETON_SCRIPTS/AbletonOSC"
+    cp -r "$BRIDGE_SRC/AbletonOSC" "$ABLETON_SCRIPTS/AbletonOSC"
+    chown -R "$CURRENT_USER" "$ABLETON_SCRIPTS/AbletonOSC"
+    echo "AbletonOSC installed to: $ABLETON_SCRIPTS/AbletonOSC"
+else
+    echo "WARNING: AbletonOSC not found in installer payload." >&2
+fi
+
+# ── Write the launchd plist ───────────────────────────────────────────────────
+cat > "$PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${BINARY}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/bridge.log</string>
+</dict>
+</plist>
+PLIST
+
+chown "$CURRENT_USER" "$PLIST_PATH"
+chmod 644 "$PLIST_PATH"
+
+# ── Load the agent now (no logout required) ───────────────────────────────────
+launchctl bootstrap "gui/$USER_UID" "$PLIST_PATH" 2>/dev/null || true
+
+echo "Bridge service installed and started."
+echo "Logs: $LOG_DIR/bridge.log"
+echo ""
+echo "Next: open Ableton Live → Preferences → Link/Tempo/MIDI → Control Surface"
+echo "      and select 'AbletonOSC' in one of the slots."
+
+exit 0

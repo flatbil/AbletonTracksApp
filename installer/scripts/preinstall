@@ -1,0 +1,13 @@
+#!/bin/bash
+# Preinstall: stop any running bridge instance before overwriting files
+
+PLIST_NAME="com.nuthouse.stagepad-bridge"
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+USER_UID=$(id -u "$CURRENT_USER" 2>/dev/null || echo "")
+PLIST_PATH="/Users/$CURRENT_USER/Library/LaunchAgents/$PLIST_NAME.plist"
+
+if [ -f "$PLIST_PATH" ] && [ -n "$USER_UID" ]; then
+    launchctl bootout "gui/$USER_UID/$PLIST_NAME" 2>/dev/null || true
+fi
+
+exit 0
