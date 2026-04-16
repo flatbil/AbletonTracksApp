@@ -1,12 +1,12 @@
 #!/bin/bash
-# StagePad Bridge — Installer Build Script
+# MD Buddy Bridge — Installer Build Script
 #
 # Run this from the REPO ROOT:
 #   bash installer/build.sh
 #
 # Outputs:
-#   StagePadBridge.pkg          — installer (distribute this)
-#   "Uninstall StagePad Bridge.command" — uninstaller (distribute alongside)
+#   MDBuddyBridge.pkg          — installer (distribute this)
+#   "Uninstall MD Buddy Bridge.command" — uninstaller (distribute alongside)
 #
 # Requirements (developer machine only):
 #   pip3 install pyinstaller
@@ -20,26 +20,26 @@ cd "$REPO_ROOT"
 VERSION="1.0"
 IDENTIFIER="com.nuthouse.stagepad-bridge"
 PAYLOAD_ROOT="$SCRIPT_DIR/_payload"
-COMPONENT_PKG="$SCRIPT_DIR/StagePadBridge_component.pkg"
-OUTPUT_PKG="$REPO_ROOT/StagePadBridge.pkg"
+COMPONENT_PKG="$SCRIPT_DIR/MDBuddyBridge_component.pkg"
+OUTPUT_PKG="$REPO_ROOT/MDBuddyBridge.pkg"
 
-echo "=== StagePad Bridge — Installer Builder ==="
+echo "=== MD Buddy Bridge — Installer Builder ==="
 echo ""
 
 # ── 1. Build PyInstaller binary ───────────────────────────────────────────────
 echo "[1/5] Building standalone binary with PyInstaller..."
 pip3 install pyinstaller --quiet
-pyinstaller installer/StagePadBridge.spec --noconfirm --clean
-echo "      Done → dist/StagePadBridge/"
+pyinstaller installer/MDBuddyBridge.spec --noconfirm --clean
+echo "      Done → dist/MDBuddyBridge/"
 
 # ── 2. Stage payload ──────────────────────────────────────────────────────────
 echo "[2/5] Staging installer payload..."
 rm -rf "$PAYLOAD_ROOT"
-INSTALL_DIR="$PAYLOAD_ROOT/Library/Application Support/StagePadBridge"
+INSTALL_DIR="$PAYLOAD_ROOT/Library/Application Support/MDBuddyBridge"
 mkdir -p "$INSTALL_DIR"
 
 # Bridge binary
-cp -r dist/StagePadBridge "$INSTALL_DIR/"
+cp -r dist/MDBuddyBridge "$INSTALL_DIR/"
 
 # AbletonOSC remote script (bundled into the pkg so postinstall can deploy it)
 cp -r AbletonOSC "$INSTALL_DIR/"
@@ -73,8 +73,8 @@ echo "      Output: $OUTPUT_PKG"
 
 # ── 5. Copy uninstaller alongside ────────────────────────────────────────────
 echo "[5/5] Copying uninstaller..."
-cp "$SCRIPT_DIR/Uninstall StagePad Bridge.command" "$REPO_ROOT/"
-chmod +x "$REPO_ROOT/Uninstall StagePad Bridge.command"
+cp "$SCRIPT_DIR/Uninstall MD Buddy Bridge.command" "$REPO_ROOT/"
+chmod +x "$REPO_ROOT/Uninstall MD Buddy Bridge.command"
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 rm -f "$COMPONENT_PKG"
@@ -84,12 +84,12 @@ echo ""
 echo "=== Build complete ==="
 echo ""
 echo "Distribute these two files:"
-echo "  → StagePadBridge.pkg"
-echo "  → Uninstall StagePad Bridge.command"
+echo "  → MDBuddyBridge.pkg"
+echo "  → Uninstall MD Buddy Bridge.command"
 echo ""
 echo "To sign and notarize (required for Gatekeeper-free distribution):"
 echo "  productsign --sign 'Developer ID Installer: YOUR NAME (TEAMID)' \\"
-echo "              StagePadBridge.pkg StagePadBridge-signed.pkg"
-echo "  xcrun notarytool submit StagePadBridge-signed.pkg \\"
+echo "              MDBuddyBridge.pkg MDBuddyBridge-signed.pkg"
+echo "  xcrun notarytool submit MDBuddyBridge-signed.pkg \\"
 echo "              --apple-id you@example.com --team-id TEAMID --wait"
-echo "  xcrun stapler staple StagePadBridge-signed.pkg"
+echo "  xcrun stapler staple MDBuddyBridge-signed.pkg"

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>StagePad Bridge</title>
+    <title>MD Buddy Bridge</title>
     <background file="background.png" alignment="bottomleft" scaling="proportional"/>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
@@ -10,10 +10,10 @@
     <choices-outline>
         <line choice="com.nuthouse.stagepad-bridge"/>
     </choices-outline>
-    <choice id="com.nuthouse.stagepad-bridge" title="StagePad Bridge">
+    <choice id="com.nuthouse.stagepad-bridge" title="MD Buddy Bridge">
         <pkg-ref id="com.nuthouse.stagepad-bridge"/>
     </choice>
     <pkg-ref id="com.nuthouse.stagepad-bridge"
              version="1.0"
-             onConclusion="none">StagePadBridge_component.pkg</pkg-ref>
+             onConclusion="none">MDBuddyBridge_component.pkg</pkg-ref>
 </installer-gui-script>

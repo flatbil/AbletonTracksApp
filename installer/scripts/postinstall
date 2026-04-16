@@ -6,8 +6,8 @@
 set -e
 
 PLIST_NAME="com.nuthouse.stagepad-bridge"
-BRIDGE_SRC="/Library/Application Support/StagePadBridge"
-BINARY="$BRIDGE_SRC/StagePadBridge/StagePadBridge"
+BRIDGE_SRC="/Library/Application Support/MDBuddyBridge"
+BINARY="$BRIDGE_SRC/MDBuddyBridge/MDBuddyBridge"
 
 # ── Detect the logged-in user ─────────────────────────────────────────────────
 CURRENT_USER=$(stat -f "%Su" /dev/console)
@@ -25,10 +25,10 @@ USER_HOME=$(dscl . -read "/Users/$CURRENT_USER" NFSHomeDirectory | awk '{print $
 
 ABLETON_SCRIPTS="$USER_HOME/Music/Ableton/User Library/Remote Scripts"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
-LOG_DIR="$USER_HOME/Library/Logs/StagePadBridge"
+LOG_DIR="$USER_HOME/Library/Logs/MDBuddyBridge"
 PLIST_PATH="$LAUNCH_AGENTS/$PLIST_NAME.plist"
 
-echo "Installing StagePad Bridge for user: $CURRENT_USER"
+echo "Installing MD Buddy Bridge for user: $CURRENT_USER"
 
 # ── Create directories ────────────────────────────────────────────────────────
 mkdir -p "$ABLETON_SCRIPTS" "$LAUNCH_AGENTS" "$LOG_DIR"

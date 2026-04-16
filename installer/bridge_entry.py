@@ -1,4 +1,4 @@
-"""PyInstaller entry point for the StagePad Bridge."""
+"""PyInstaller entry point for the MD Buddy Bridge."""
 import asyncio
 import sys
 import os

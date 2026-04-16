@@ -1,15 +1,15 @@
 #!/bin/bash
-# StagePad Bridge Uninstaller
+# MD Buddy Bridge Uninstaller
 # Double-click this file to uninstall.
 
 PLIST_NAME="com.nuthouse.stagepad-bridge"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
-LOG_DIR="$HOME/Library/Logs/StagePadBridge"
-BRIDGE_APP="/Library/Application Support/StagePadBridge"
+LOG_DIR="$HOME/Library/Logs/MDBuddyBridge"
+BRIDGE_APP="/Library/Application Support/MDBuddyBridge"
 ABLETON_OSC="$HOME/Music/Ableton/User Library/Remote Scripts/AbletonOSC"
 
 echo "╔════════════════════════════════════════╗"
-echo "║   StagePad Bridge Uninstaller          ║"
+echo "║   MD Buddy Bridge Uninstaller          ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 
@@ -52,7 +52,7 @@ if [ -d "$ABLETON_OSC" ]; then
 fi
 
 echo ""
-echo "✓ StagePad Bridge has been uninstalled."
+echo "✓ MD Buddy Bridge has been uninstalled."
 echo ""
 echo "Press any key to close..."
 read -r -n 1

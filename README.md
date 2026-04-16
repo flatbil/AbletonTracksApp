@@ -1,4 +1,4 @@
-# AbletonTracksApp — StagePad Bridge
+# AbletonTracksApp — MD Buddy Bridge
 
 A lightweight bridge that connects Ableton Live to the **StagePad** iPad app over WebSocket. It reads cue point markers from an Ableton set, organises them into a song/section tree, and streams live playback state to the iPad in real time — giving performers instant visual feedback and one-tap section jumping during a live show.
 
@@ -74,14 +74,14 @@ Song headers are matched by the regex `^==\s*(.+?)\s*==$`. Any cue point not mat
 
 ### Option A — Installer package (recommended, no technical setup required)
 
-1. Download `StagePadBridge.pkg` and `Uninstall StagePad Bridge.command` from the releases page
+1. Download `StagePadBridge.pkg` and `Uninstall MD Buddy Bridge.command` from the releases page
 2. Double-click `StagePadBridge.pkg` and follow the wizard
 3. Open Ableton Live → **Preferences → Link/Tempo/MIDI → Control Surface** → select **AbletonOSC**
 4. Open StagePad on your iPad — it connects automatically
 
 > **Gatekeeper note:** If macOS blocks the installer, go to **System Settings → Privacy & Security** and click **Open Anyway**, or right-click the pkg and choose **Open**.
 
-To uninstall: double-click `Uninstall StagePad Bridge.command`.
+To uninstall: double-click `Uninstall MD Buddy Bridge.command`.
 
 ### Option B — From source (developers)
 
@@ -114,7 +114,7 @@ bash start.sh
 pip3 install pyinstaller
 bash installer/build.sh
 ```
-Outputs `StagePadBridge.pkg` + `Uninstall StagePad Bridge.command` in the repo root.
+Outputs `StagePadBridge.pkg` + `Uninstall MD Buddy Bridge.command` in the repo root.
 
 **Logs (when running as a service):**
 ```bash

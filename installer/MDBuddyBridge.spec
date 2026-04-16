@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for StagePad Bridge
-# Run from the repo root: pyinstaller installer/StagePadBridge.spec
+# PyInstaller spec for MD Buddy Bridge
+# Run from the repo root: pyinstaller installer/MDBuddyBridge.spec
 
 import os
 block_cipher = None
@@ -82,7 +82,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='StagePadBridge',
+    name='MDBuddyBridge',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -98,5 +98,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='StagePadBridge',
+    name='MDBuddyBridge',
 )
