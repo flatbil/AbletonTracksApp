@@ -316,3 +316,16 @@ Positions are in **beats from the start of the Ableton set**.
 | `python-osc` | OSC encode/decode |
 | `zeroconf` | Bonjour service advertisement |
 | `websockets` | WebSocket runtime support for uvicorn |
+---
+
+## Privacy Policy <a name="privacy"></a>
+
+MD Buddy does not collect, store, or transmit any personal data.
+
+- The app communicates exclusively with the MD Buddy Bridge running on the user's own local network
+- No data leaves the local network
+- No analytics, advertising SDKs, or third-party services are used
+- No account or login is required
+- No location data, contacts, camera, or microphone access is requested
+
+*Last updated: April 2026*
