@@ -52,6 +52,10 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_guide_clip_path(address, *params)
         elif address in ("/live/song/get/beat", "/live/song/get/current_song_time"):
             self._bridge._handle_beat(address, *params)
+        elif address == "/live/song/get/track_data":
+            self._bridge._handle_track_data(address, *params)
+        elif address == "/live/track/get/mute":
+            self._bridge._handle_track_mute(address, *params)
         elif address == "/live/song/get/is_playing":
             self._bridge._handle_is_playing(address, *params)
         elif address == "/live/song/get/tempo":
@@ -63,10 +67,12 @@ class _OSCProtocol(asyncio.DatagramProtocol):
 
 
 class AbletonBridge:
-    def __init__(self, state: AppState, on_position_update: Callable, on_state_change: Callable):
+    def __init__(self, state: AppState, on_position_update: Callable,
+                 on_state_change: Callable, on_tracks_change: Callable):
         self._state = state
         self._on_position_update = on_position_update  # called on every beat update
         self._on_state_change = on_state_change        # called when markers change
+        self._on_tracks_change = on_tracks_change      # called when track mute state changes
 
         self._client = SimpleUDPClient(ABLETON_HOST, SEND_PORT)
         self._transport = None
@@ -107,6 +113,7 @@ class AbletonBridge:
 
         # Pull initial state
         self.refresh()
+        self.fetch_tracks()
 
         # Start background cue point poll
         self._poll_task = asyncio.get_event_loop().create_task(self._poll_cue_points())
@@ -124,6 +131,7 @@ class AbletonBridge:
         """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds.
         Also refreshes position, play state, and tempo so that changes survive
         project reloads or AbletonOSC restarts (which silently drop listeners)."""
+        poll_count = 0
         while True:
             await asyncio.sleep(CUE_POLL_INTERVAL)
             self._client.send_message("/live/song/get/cue_points", [])
@@ -131,6 +139,10 @@ class AbletonBridge:
             self._client.send_message("/live/song/get/is_playing", [])
             self._client.send_message("/live/song/get/tempo", [])
             self._client.send_message("/live/song/get/signature_numerator", [])
+            poll_count += 1
+            if poll_count % 5 == 0:
+                # Refresh track list every 5 seconds to catch external mute changes
+                self.fetch_tracks()
 
     def refresh(self):
         """Ask Ableton for a full state dump."""
@@ -139,10 +151,22 @@ class AbletonBridge:
         self._client.send_message("/live/song/get/current_song_time", [])
         self._client.send_message("/live/song/get/tempo", [])
         self._client.send_message("/live/song/get/signature_numerator", [])
+        self.fetch_tracks()
 
     # ------------------------------------------------------------------ #
     # Commands → Ableton
     # ------------------------------------------------------------------ #
+
+    def fetch_tracks(self):
+        """Request all track names and mute states in one OSC call.
+        Response arrives at /live/song/get/track_data as a flat list:
+        [name0, mute0, name1, mute1, ...]"""
+        self._client.send_message("/live/song/get/track_data", [0, -1, "track.name", "track.mute"])
+
+    def set_track_mute(self, track_index: int, muted: bool):
+        """Mute or unmute a track by index, then re-fetch to confirm."""
+        self._client.send_message("/live/track/set/mute", [track_index, int(muted)])
+        asyncio.get_event_loop().call_later(0.2, self.fetch_tracks)
 
     def jump_to_cue_index(self, index: int):
         """Jump to a cue point by index — unambiguous and respects launch quantization."""
@@ -337,4 +361,32 @@ class AbletonBridge:
             return
         self._state.time_signature_numerator = int(args[0])
         self._on_position_update()
+
+    def _handle_track_data(self, address, *args):
+        """Parse flat [name0, mute0, name1, mute1, ...] from track_data response."""
+        args = list(args)
+        tracks = []
+        i = 0
+        idx = 0
+        while i + 1 < len(args):
+            name = str(args[i])
+            muted = bool(args[i + 1])
+            tracks.append({"index": idx, "name": name, "muted": muted})
+            i += 2
+            idx += 1
+        if tracks:
+            self._state.tracks = tracks
+            self._on_tracks_change()
+
+    def _handle_track_mute(self, address, *args):
+        """Handle a per-track mute update from a start_listen subscription.
+        Args arrive as (track_id, mute_value) when include_track_id=True."""
+        if len(args) != 2:
+            return
+        track_id, muted = int(args[0]), bool(args[1])
+        for track in self._state.tracks:
+            if track["index"] == track_id:
+                track["muted"] = muted
+                self._on_tracks_change()
+                return
 

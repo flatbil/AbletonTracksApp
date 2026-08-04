@@ -118,6 +118,12 @@ def on_position_update():
     )
 
 
+def on_tracks_change():
+    asyncio.get_event_loop().create_task(
+        manager.broadcast(_state.tracks_snapshot())
+    )
+
+
 # ------------------------------------------------------------------ #
 # Routes
 # ------------------------------------------------------------------ #
@@ -200,6 +206,12 @@ async def websocket_endpoint(ws: WebSocket):
                 song_idx = msg.get("song_index", -1)
                 sec_idx = msg.get("section_index", -1)
                 _handle_jump(song_idx, sec_idx)
+
+            elif msg_type == "mute_track":
+                track_idx = msg.get("track_index", -1)
+                muted = bool(msg.get("muted", False))
+                if track_idx >= 0:
+                    _ableton.set_track_mute(track_idx, muted)
 
             elif msg_type == "transport":
                 action = msg.get("action")
