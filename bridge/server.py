@@ -53,29 +53,47 @@ def init(state: AppState, ableton):
 
 class _ConnectionManager:
     def __init__(self):
-        self._connections: list[WebSocket] = []
+        self._primary: WebSocket | None = None
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket) -> bool:
+        """Accept the socket. Returns False (and rejects) if a primary already exists."""
         await ws.accept()
-        self._connections.append(ws)
-        log.info("Client connected. Total: %d", len(self._connections))
+        if self._primary is not None:
+            await ws.send_text(json.dumps({
+                "type": "connection_rejected",
+                "reason": "primary_in_use",
+            }))
+            await ws.close(code=4000)
+            log.info("Rejected connection — primary already active")
+            return False
+        self._primary = ws
+        log.info("Primary device connected")
+        return True
 
     def disconnect(self, ws: WebSocket):
-        self._connections.remove(ws)
-        log.info("Client disconnected. Total: %d", len(self._connections))
+        if self._primary is ws:
+            self._primary = None
+            log.info("Primary device disconnected")
+
+    async def release(self):
+        """Send control_released to primary and clear the slot."""
+        ws = self._primary
+        self._primary = None
+        if ws:
+            try:
+                await ws.send_text(json.dumps({"type": "control_released"}))
+                await ws.close(code=1000)
+            except Exception:
+                pass
+        log.info("Primary released control")
 
     async def broadcast(self, message: dict):
-        if not self._connections:
+        if self._primary is None:
             return
-        data = json.dumps(message)
-        dead = []
-        for ws in self._connections:
-            try:
-                await ws.send_text(data)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._connections.remove(ws)
+        try:
+            await self._primary.send_text(json.dumps(message))
+        except Exception:
+            self._primary = None
 
     async def send(self, ws: WebSocket, message: dict):
         await ws.send_text(json.dumps(message))
@@ -161,7 +179,9 @@ async def apply_analysis(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    await manager.connect(ws)
+    if not await manager.connect(ws):
+        return  # rejected — message and close already sent
+
     try:
         # Refresh from Ableton then send full state so the client gets current position
         _ableton.refresh()
@@ -192,6 +212,10 @@ async def websocket_endpoint(ws: WebSocket):
                 _ableton.refresh()
                 await manager.send(ws, _state.full_snapshot())
 
+            elif msg_type == "release_control":
+                await manager.release()
+                return
+
             elif msg_type == "generate_cues":
                 track_name = msg.get("track_name", "Cues")
                 log.info("Generating cues from track '%s'", track_name)
@@ -205,7 +229,6 @@ async def websocket_endpoint(ws: WebSocket):
                 log.info("Analyzing guide track '%s' with Whisper model '%s'", track_name, model_size)
                 async def _run_analysis():
                     result = await _ableton.analyze_guide_track(track_name, model_size)
-                    # Send result back to this client so the app can show completion
                     status = "done" if result.get("sections") else "error"
                     await manager.send(ws, {
                         "type": "analyze_guide_result",
@@ -232,28 +255,9 @@ def _handle_jump(song_idx: int, section_idx: int):
         log.error("Jump failed: %s", e)
         return
 
-    if _state.is_playing and _state.tempo > 0:
-        asyncio.get_event_loop().create_task(_jump_on_bar(cue_index, song_idx, section_idx))
-    else:
-        log.info("Jumping immediately to cue %d (song=%d section=%d)", cue_index, song_idx, section_idx)
-        _ableton.jump_to_cue_index(cue_index)
-
-
-async def _jump_on_bar(cue_index: int, song_idx: int, section_idx: int):
-    """Wait until the next bar boundary, then send the jump to Ableton."""
-    num = _state.time_signature_numerator or 4
-    pos = _state.current_position
-    beats_into_bar = pos % num
-    beats_until_next = num - beats_into_bar
-    # If we're already within 0.1 beats of the bar, skip to the following one
-    # so the jump doesn't fire almost immediately and feel unquantized.
-    if beats_until_next < 0.1:
-        beats_until_next += num
-    seconds = beats_until_next * 60.0 / _state.tempo
-    log.info(
-        "Jump queued to cue %d (song=%d section=%d): %.2f beats / %.2fs to next bar",
-        cue_index, song_idx, section_idx, beats_until_next, seconds,
-    )
-    await asyncio.sleep(seconds)
-    log.info("Jump firing: cue %d", cue_index)
+    # Send the jump directly — Ableton's own launch quantization handles bar-
+    # boundary timing. A bridge-side sleep caused double-quantization (bridge
+    # waits for bar, then Ableton also waits for bar), making jumps fire 2 bars
+    # late and leaving the iOS progress bar frozen the whole time.
+    log.info("Jumping to cue %d (song=%d section=%d)", cue_index, song_idx, section_idx)
     _ableton.jump_to_cue_index(cue_index)
