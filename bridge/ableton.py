@@ -52,8 +52,8 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_guide_clip_path(address, *params)
         elif address in ("/live/song/get/beat", "/live/song/get/current_song_time"):
             self._bridge._handle_beat(address, *params)
-        elif address == "/live/song/get/track_data":
-            self._bridge._handle_track_data(address, *params)
+        elif address == "/live/song/get/track_names":
+            self._bridge._handle_track_names(address, *params)
         elif address == "/live/track/get/mute":
             self._bridge._handle_track_mute(address, *params)
         elif address == "/live/song/get/is_playing":
@@ -158,10 +158,8 @@ class AbletonBridge:
     # ------------------------------------------------------------------ #
 
     def fetch_tracks(self):
-        """Request all track names and mute states in one OSC call.
-        Response arrives at /live/song/get/track_data as a flat list:
-        [name0, mute0, name1, mute1, ...]"""
-        self._client.send_message("/live/song/get/track_data", [0, -1, "track.name", "track.mute"])
+        """Request all track names. Mute state arrives via start_listen subscriptions."""
+        self._client.send_message("/live/song/get/track_names", [])
 
     def set_track_mute(self, track_index: int, muted: bool):
         """Mute or unmute a track by index, then re-fetch to confirm."""
@@ -362,21 +360,21 @@ class AbletonBridge:
         self._state.time_signature_numerator = int(args[0])
         self._on_position_update()
 
-    def _handle_track_data(self, address, *args):
-        """Parse flat [name0, mute0, name1, mute1, ...] from track_data response."""
-        args = list(args)
-        tracks = []
-        i = 0
-        idx = 0
-        while i + 1 < len(args):
-            name = str(args[i])
-            muted = bool(args[i + 1])
-            tracks.append({"index": idx, "name": name, "muted": muted})
-            i += 2
-            idx += 1
-        if tracks:
-            self._state.tracks = tracks
-            self._on_tracks_change()
+    def _handle_track_names(self, address, *args):
+        """Build track list from names, preserving existing mute state, then subscribe to mute updates."""
+        names = [str(a) for a in args]
+        if not names:
+            return
+        old_mutes = {t["index"]: t["muted"] for t in self._state.tracks}
+        self._state.tracks = [
+            {"index": i, "name": name, "muted": old_mutes.get(i, False)}
+            for i, name in enumerate(names)
+        ]
+        self._on_tracks_change()
+        # Subscribe to live mute updates for every track. The first notification
+        # gives us the real initial state; subsequent ones fire on any change.
+        for i in range(len(names)):
+            self._client.send_message("/live/track/start_listen/mute", [i])
 
     def _handle_track_mute(self, address, *args):
         """Handle a per-track mute update from a start_listen subscription.
