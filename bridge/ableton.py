@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 ABLETON_HOST = "127.0.0.1"
 SEND_PORT = 11000   # AbletonOSC listens here
 RECV_PORT = 11001   # we listen here for responses (AbletonOSC default response port)
-CUE_POLL_INTERVAL = 2.0  # seconds between cue point polls
+CUE_POLL_INTERVAL = 1.0  # seconds between cue point polls
 
 
 class _OSCProtocol(asyncio.DatagramProtocol):
