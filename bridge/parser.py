@@ -1,14 +1,32 @@
 """
 Parse raw Ableton cue points into a song/section tree.
 
-Naming convention:
-  Song header  →  == Amazing Grace ==
+Naming convention (either works):
+  Named song   →  == Amazing Grace ==   (song header marker)
+  Unnamed song →  first marker is a recognized "song start" keyword
+                  → auto-named "Song 1", "Song 2", etc.
+
   Section      →  Verse 1, Chorus, Bridge, ...
 """
 
 import re
 
 SONG_HEADER = re.compile(r"^==\s*(.+?)\s*==$")
+
+# Cue names that signal the start of a new song when the == convention isn't used.
+# Deliberately excludes "Intro" — it's commonly a section name within a song.
+SONG_START_KEYWORDS = {
+    "start",                    # English
+    "inicio", "início",         # Spanish / Portuguese
+    "começo", "comienzo",       # Portuguese / Spanish
+    "début", "debut",           # French (accented and plain)
+    "anfang",                   # German
+    "inizio",                   # Italian
+}
+
+
+def _is_song_start(name: str) -> bool:
+    return name.strip().lower() in SONG_START_KEYWORDS
 
 
 def parse_markers(cue_points: list[dict]) -> list[dict]:
@@ -60,6 +78,16 @@ def parse_markers(cue_points: list[dict]) -> list[dict]:
                 "name": match.group(1),
                 "position": position,
                 "sections": [{"name": "Start", "position": position, "cue_index": cue_index}],
+            }
+            songs.append(current_song)
+        elif _is_song_start(name):
+            # Keyword-only convention: "Start", "Inicio", "Début", etc. each open
+            # a new unnamed song. Song name auto-increments ("Song 1", "Song 2", …).
+            song_number = len(songs) + 1
+            current_song = {
+                "name": f"Song {song_number}",
+                "position": position,
+                "sections": [{"name": name, "position": position, "cue_index": cue_index}],
             }
             songs.append(current_song)
         elif current_song is not None:
