@@ -16,6 +16,8 @@ class AppState:
     current_section_index: int = -1
     tempo: float = 0.0
     time_signature_numerator: int = 4
+    cue_count: int = 0
+    cue_warning: bool = False
 
     def position_snapshot(self) -> dict:
         """Lightweight message sent ~every beat."""
@@ -45,4 +47,6 @@ class AppState:
             "current_section_index": self.current_section_index,
             "tempo": self.tempo,
             "time_signature_numerator": self.time_signature_numerator,
+            "cue_count": self.cue_count,
+            "cue_warning": self.cue_warning,
         }

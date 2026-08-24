@@ -16,6 +16,16 @@ echo "Syncing bridge code to $BRIDGE_SUPPORT..."
 rsync -a --delete "$SCRIPT_DIR/bridge/" "$BRIDGE_SUPPORT/bridge/"
 echo "  OK"
 
+REMOTE_SCRIPTS_DIR="$HOME/Music/Ableton/User Library/Remote Scripts"
+ABLETONOSC_DEST="$REMOTE_SCRIPTS_DIR/AbletonOSC"
+if [ -d "$ABLETONOSC_DEST" ]; then
+    echo "Syncing AbletonOSC remote script to $ABLETONOSC_DEST..."
+    # --exclude logs/ preserves any existing log file in place rather than
+    # deleting it (the rotating handler will cap it going forward regardless).
+    rsync -a --delete --exclude 'logs/' "$SCRIPT_DIR/AbletonOSC/" "$ABLETONOSC_DEST/"
+    echo "  OK — restart Ableton (or toggle the AbletonOSC Control Surface off/on) to load the update."
+fi
+
 echo "Restarting bridge service..."
 launchctl stop com.nuthouse.stagepad-bridge
 sleep 1

@@ -1,19 +1,27 @@
 """
 FastAPI + WebSocket server.
 
+Connection roles: the first device to connect becomes "primary" (full
+control). Every device after that connects as a read-only "observer" — it
+receives the same state/position/tracks broadcasts but any control message it
+sends (jump, mute_track, transport, generate_cues, analyze_guide,
+release_control) is silently ignored. If primary disconnects, no observer is
+auto-promoted — the slot stays empty until some device explicitly connects.
+
 WebSocket protocol (all messages are JSON):
 
   Server → Client:
     { "type": "state",    "songs": [...], "position": float, "is_playing": bool,
-      "current_song_index": int, "current_section_index": int }   ← on connect / marker change
+      "current_song_index": int, "current_section_index": int,
+      "role": "primary" | "observer" }   ← on connect / marker change / refresh
 
     { "type": "position", "position": float, "is_playing": bool,
       "current_song_index": int, "current_section_index": int }   ← on every beat update
 
   Client → Server:
-    { "type": "jump",      "song_index": int, "section_index": int }
-    { "type": "transport", "action": "play" | "stop" }
-    { "type": "refresh" }
+    { "type": "jump",      "song_index": int, "section_index": int }   ← primary only
+    { "type": "transport", "action": "play" | "stop" }                 ← primary only
+    { "type": "refresh" }                                              ← primary or observer
 """
 
 import asyncio
@@ -54,29 +62,35 @@ def init(state: AppState, ableton):
 class _ConnectionManager:
     def __init__(self):
         self._primary: WebSocket | None = None
+        self._observers: set[WebSocket] = set()
 
-    async def connect(self, ws: WebSocket) -> bool:
-        """Accept the socket. Returns False (and rejects) if a primary already exists."""
+    async def connect(self, ws: WebSocket) -> str:
+        """Accept the socket and assign it a role. The first connection becomes
+        primary (full control); every connection after that becomes a read-only
+        observer instead of being rejected."""
         await ws.accept()
-        if self._primary is not None:
-            await ws.send_text(json.dumps({
-                "type": "connection_rejected",
-                "reason": "primary_in_use",
-            }))
-            await ws.close(code=4000)
-            log.info("Rejected connection — primary already active")
-            return False
-        self._primary = ws
-        log.info("Primary device connected")
-        return True
+        if self._primary is None:
+            self._primary = ws
+            log.info("Primary device connected")
+            return "primary"
+        self._observers.add(ws)
+        log.info("Observer device connected (%d observing)", len(self._observers))
+        return "observer"
+
+    def is_primary(self, ws: WebSocket) -> bool:
+        return self._primary is ws
 
     def disconnect(self, ws: WebSocket):
         if self._primary is ws:
             self._primary = None
             log.info("Primary device disconnected")
+        else:
+            self._observers.discard(ws)
 
     async def release(self):
-        """Send control_released to primary and clear the slot."""
+        """Send control_released to primary and clear the slot. No observer is
+        auto-promoted — whichever device next explicitly connects becomes
+        primary, so control never silently transfers to a spectator."""
         ws = self._primary
         self._primary = None
         if ws:
@@ -88,12 +102,19 @@ class _ConnectionManager:
         log.info("Primary released control")
 
     async def broadcast(self, message: dict):
-        if self._primary is None:
-            return
-        try:
-            await self._primary.send_text(json.dumps(message))
-        except Exception:
-            self._primary = None
+        """Push to the primary and every observer."""
+        text = json.dumps(message)
+        targets = list(self._observers)
+        if self._primary is not None:
+            targets.append(self._primary)
+        for ws in targets:
+            try:
+                await ws.send_text(text)
+            except Exception:
+                if self._primary is ws:
+                    self._primary = None
+                else:
+                    self._observers.discard(ws)
 
     async def send(self, ws: WebSocket, message: dict):
         await ws.send_text(json.dumps(message))
@@ -185,13 +206,15 @@ async def apply_analysis(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    if not await manager.connect(ws):
-        return  # rejected — message and close already sent
+    role = await manager.connect(ws)
 
     try:
-        # Refresh from Ableton then send full state so the client gets current position
+        # Refresh from Ableton then send full state (with role) so the client
+        # gets current position and knows whether it has control.
         _ableton.refresh()
-        await manager.send(ws, _state.full_snapshot())
+        snapshot = _state.full_snapshot()
+        snapshot["role"] = role
+        await manager.send(ws, snapshot)
 
         async for raw in ws.iter_text():
             try:
@@ -201,6 +224,18 @@ async def websocket_endpoint(ws: WebSocket):
                 continue
 
             msg_type = msg.get("type")
+
+            # refresh is read-only — allowed for observers too.
+            if msg_type == "refresh":
+                _ableton.refresh()
+                snapshot = _state.full_snapshot()
+                snapshot["role"] = role
+                await manager.send(ws, snapshot)
+                continue
+
+            if not manager.is_primary(ws):
+                log.info("Ignoring '%s' from observer — not primary", msg_type)
+                continue
 
             if msg_type == "jump":
                 song_idx = msg.get("song_index", -1)
@@ -219,10 +254,6 @@ async def websocket_endpoint(ws: WebSocket):
                     _ableton.play()
                 elif action == "stop":
                     _ableton.stop_playback()
-
-            elif msg_type == "refresh":
-                _ableton.refresh()
-                await manager.send(ws, _state.full_snapshot())
 
             elif msg_type == "release_control":
                 await manager.release()

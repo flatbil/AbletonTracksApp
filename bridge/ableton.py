@@ -24,6 +24,7 @@ ABLETON_HOST = "127.0.0.1"
 SEND_PORT = 11000   # AbletonOSC listens here
 RECV_PORT = 11001   # we listen here for responses (AbletonOSC default response port)
 CUE_POLL_INTERVAL = 1.0  # seconds between cue point polls
+CUE_POINT_WARNING_THRESHOLD = 500  # warn when raw cue count approaches OSC buffer limits
 
 
 class _OSCProtocol(asyncio.DatagramProtocol):
@@ -309,7 +310,11 @@ class AbletonBridge:
         s_idx, sc_idx = find_current_indices(self._state.songs, self._state.current_position)
         self._state.current_song_index = s_idx
         self._state.current_section_index = sc_idx
+        self._state.cue_count = len(raw)
+        self._state.cue_warning = len(raw) >= CUE_POINT_WARNING_THRESHOLD
         log.info("Cue points changed — loaded %d songs from %d cue points", len(self._state.songs), len(raw))
+        if self._state.cue_warning:
+            log.warning("Cue point count (%d) exceeds warning threshold (%d)", len(raw), CUE_POINT_WARNING_THRESHOLD)
         self._on_state_change()
 
     def _handle_beat(self, address, *args):

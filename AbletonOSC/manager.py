@@ -7,6 +7,7 @@ from . import abletonosc
 import importlib
 import traceback
 import logging
+import logging.handlers
 import os
 
 logger = logging.getLogger("abletonosc")
@@ -44,7 +45,13 @@ class Manager(ControlSurface):
         if not os.path.exists(log_dir):
             os.mkdir(log_dir, 0o755)
         log_path = os.path.join(log_dir, "abletonosc.log")
-        self.log_file_handler = logging.FileHandler(log_path)
+        # RotatingFileHandler instead of a plain FileHandler — the plain handler
+        # has no size cap and grows unbounded over weeks/months of regular use
+        # (observed 500+ MB on one machine), which can fill a volunteer's Mac.
+        # Cap at 5 MB x 3 files (10 MB max total) instead.
+        self.log_file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=5 * 1024 * 1024, backupCount=2
+        )
         self.log_file_handler.setLevel(self.log_level.upper())
         formatter = logging.Formatter('(%(asctime)s) [%(levelname)s] %(message)s')
         self.log_file_handler.setFormatter(formatter)
