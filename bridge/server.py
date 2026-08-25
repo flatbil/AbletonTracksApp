@@ -13,20 +13,27 @@ WebSocket protocol (all messages are JSON):
   Server → Client:
     { "type": "state",    "songs": [...], "position": float, "is_playing": bool,
       "current_song_index": int, "current_section_index": int,
-      "role": "primary" | "observer" }   ← on connect / marker change / refresh
+      "role": "primary" | "observer", "connection_id": str }   ← on connect / marker change / refresh
 
     { "type": "position", "position": float, "is_playing": bool,
       "current_song_index": int, "current_section_index": int }   ← on every beat update
+
+    { "type": "roster", "devices": [{"connection_id": str, "name": str,
+      "role": "primary" | "observer"}, ...] }   ← whenever a device connects,
+      disconnects, or registers a name — the "who's connected" list
 
   Client → Server:
     { "type": "jump",      "song_index": int, "section_index": int }   ← primary only
     { "type": "transport", "action": "play" | "stop" }                 ← primary only
     { "type": "refresh" }                                              ← primary or observer
+    { "type": "register",  "name": str }                                ← primary or observer,
+      declares this device's display name for the roster
 """
 
 import asyncio
 import json
 import logging
+import uuid
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -63,22 +70,47 @@ class _ConnectionManager:
     def __init__(self):
         self._primary: WebSocket | None = None
         self._observers: set[WebSocket] = set()
+        self._ids: dict[WebSocket, str] = {}
+        self._names: dict[WebSocket, str] = {}
 
-    async def connect(self, ws: WebSocket) -> str:
-        """Accept the socket and assign it a role. The first connection becomes
-        primary (full control); every connection after that becomes a read-only
-        observer instead of being rejected."""
+    async def connect(self, ws: WebSocket) -> tuple[str, str]:
+        """Accept the socket and assign it a role + a stable connection id.
+        The first connection becomes primary (full control); every connection
+        after that becomes a read-only observer instead of being rejected."""
         await ws.accept()
+        connection_id = uuid.uuid4().hex[:8]
+        self._ids[ws] = connection_id
+        self._names[ws] = "Unnamed Device"
         if self._primary is None:
             self._primary = ws
-            log.info("Primary device connected")
-            return "primary"
+            log.info("Primary device connected (%s)", connection_id)
+            return "primary", connection_id
         self._observers.add(ws)
-        log.info("Observer device connected (%d observing)", len(self._observers))
-        return "observer"
+        log.info("Observer device connected (%s, %d observing)", connection_id, len(self._observers))
+        return "observer", connection_id
 
     def is_primary(self, ws: WebSocket) -> bool:
         return self._primary is ws
+
+    def set_name(self, ws: WebSocket, name: str):
+        self._names[ws] = name.strip() or "Unnamed Device"
+
+    def roster(self) -> list[dict]:
+        """Every connected device, primary first, for the "who's connected" list."""
+        devices = []
+        if self._primary is not None:
+            devices.append({
+                "connection_id": self._ids[self._primary],
+                "name": self._names[self._primary],
+                "role": "primary",
+            })
+        for ws in self._observers:
+            devices.append({
+                "connection_id": self._ids[ws],
+                "name": self._names[ws],
+                "role": "observer",
+            })
+        return devices
 
     def disconnect(self, ws: WebSocket):
         if self._primary is ws:
@@ -86,6 +118,8 @@ class _ConnectionManager:
             log.info("Primary device disconnected")
         else:
             self._observers.discard(ws)
+        self._ids.pop(ws, None)
+        self._names.pop(ws, None)
 
     async def release(self):
         """Send control_released to primary and clear the slot. No observer is
@@ -118,6 +152,9 @@ class _ConnectionManager:
 
     async def send(self, ws: WebSocket, message: dict):
         await ws.send_text(json.dumps(message))
+
+    async def broadcast_roster(self):
+        await self.broadcast({"type": "roster", "devices": self.roster()})
 
 
 manager = _ConnectionManager()
@@ -206,15 +243,20 @@ async def apply_analysis(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    role = await manager.connect(ws)
+    role, connection_id = await manager.connect(ws)
 
     try:
-        # Refresh from Ableton then send full state (with role) so the client
-        # gets current position and knows whether it has control.
+        # Refresh from Ableton then send full state (with role + connection_id)
+        # so the client gets current position, knows whether it has control,
+        # and can pick itself out of the roster broadcast below.
         _ableton.refresh()
         snapshot = _state.full_snapshot()
         snapshot["role"] = role
+        snapshot["connection_id"] = connection_id
         await manager.send(ws, snapshot)
+        # A new device joined — let everyone (including this one) see the
+        # updated "who's connected" list.
+        await manager.broadcast_roster()
 
         async for raw in ws.iter_text():
             try:
@@ -225,12 +267,19 @@ async def websocket_endpoint(ws: WebSocket):
 
             msg_type = msg.get("type")
 
-            # refresh is read-only — allowed for observers too.
+            # refresh and register are read-only/self-identifying — allowed
+            # for observers too, not just the primary.
             if msg_type == "refresh":
                 _ableton.refresh()
                 snapshot = _state.full_snapshot()
                 snapshot["role"] = role
+                snapshot["connection_id"] = connection_id
                 await manager.send(ws, snapshot)
+                continue
+
+            if msg_type == "register":
+                manager.set_name(ws, str(msg.get("name", "")))
+                await manager.broadcast_roster()
                 continue
 
             if not manager.is_primary(ws):
@@ -288,6 +337,7 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         manager.disconnect(ws)
+        await manager.broadcast_roster()
 
 
 def _handle_jump(song_idx: int, section_idx: int):
