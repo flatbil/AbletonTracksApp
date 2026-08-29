@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>MD Buddy Bridge</title>
-    <background file="background.png" alignment="bottomleft" scaling="proportional"/>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>

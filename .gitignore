@@ -10,3 +10,11 @@ build/
 .DS_Store
 ._*
 **/._.DS_Store
+
+# Installer build outputs — built by installer/build.sh, distributed as a
+# GitHub Release asset, not committed to the repo.
+/MDBuddyBridge.pkg
+/MDBuddyBridge-signed.pkg
+/Uninstall MD Buddy Bridge.command
+installer/_payload/
+installer/MDBuddyBridge_component.pkg

@@ -5,9 +5,15 @@
 import os
 block_cipher = None
 
+# Use absolute paths anchored to this spec file's own location (SPECPATH,
+# injected by PyInstaller) — relative paths here were resolved inconsistently
+# between the entry script and pathex across PyInstaller versions, which
+# silently produced a binary that couldn't find the 'bridge' package at all.
+REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
+
 a = Analysis(
-    ['installer/bridge_entry.py'],
-    pathex=['.'],          # repo root — makes 'bridge' package importable
+    [os.path.join(SPECPATH, 'bridge_entry.py')],
+    pathex=[REPO_ROOT],     # repo root — makes 'bridge' package importable
     binaries=[],
     datas=[],
     hiddenimports=[
