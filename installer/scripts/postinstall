@@ -81,9 +81,16 @@ launchctl bootstrap "gui/$USER_UID" "$PLIST_PATH" 2>/dev/null || true
 # payload's file permissions were wrong — nothing anywhere told the user).
 # Wait briefly, then actually check, and surface a real, actionable message
 # if it didn't come up instead of silently succeeding.
+#
+# 20s, not 6s: a freshly-installed, freshly-notarized binary's very first
+# launch can take several extra seconds while macOS verifies its
+# notarization ticket with Apple (a one-time cost, cached after). A 6s
+# window produced a false-positive failure dialog during testing even
+# though the bridge came up fine moments later — confirmed by checking
+# process/port state right after the dialog fired.
 echo "Verifying the bridge started..."
 BRIDGE_OK=0
-for i in 1 2 3 4 5 6; do
+for i in $(seq 1 20); do
     sleep 1
     if curl -s -m 2 http://localhost:8766/health 2>/dev/null | grep -q '"status":"ok"'; then
         BRIDGE_OK=1
