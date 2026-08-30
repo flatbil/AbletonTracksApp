@@ -33,7 +33,16 @@ export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 
 VERSION="1.1"
 IDENTIFIER="com.nuthouse.stagepad-bridge"
-PAYLOAD_ROOT="$SCRIPT_DIR/_payload"
+# On internal (APFS) storage, NOT under $SCRIPT_DIR — the repo lives on the
+# T7 Shield external drive, which is exFAT. exFAT has no concept of Unix
+# permission bits at all: chmod against a file there returns success but is
+# a complete no-op (verified directly — before/after `ls -la` were byte-
+# identical). pkgbuild captures whatever permissions the payload root
+# reports, so a payload staged on the T7 silently ships whatever arbitrary
+# permissions the source files happened to have, immune to any chmod this
+# script runs. Staging on /tmp (APFS) is what makes the permission fix below
+# actually take effect.
+PAYLOAD_ROOT="/tmp/mdbuddybridge_build_payload"
 COMPONENT_PKG="$SCRIPT_DIR/MDBuddyBridge_component.pkg"
 OUTPUT_PKG="$REPO_ROOT/MDBuddyBridge.pkg"
 SIGNED_PKG="$REPO_ROOT/MDBuddyBridge-signed.pkg"
@@ -118,6 +127,22 @@ mkdir -p "$INSTALL_DIR"
 cp -r "$BUNDLE_DIR" "$INSTALL_DIR/"
 cp -r AbletonOSC "$INSTALL_DIR/"
 find "$PAYLOAD_ROOT" -name "._*" -delete 2>&1 || true
+# NOTE: pkgbuild's BOM still ends up with ~200 "._*" AppleDouble entries
+# even after this — neither deleting visible sidecar files nor stripping
+# xattrs (tried both) eliminates them. Root cause not fully pinned down;
+# deprioritized because it's cosmetic (harmless leftover metadata, doesn't
+# affect installation or the bridge running) rather than functional, unlike
+# the permission bug below. Revisit if it ever turns out to matter.
+xattr -cr "$PAYLOAD_ROOT" 2>&1 || true
+
+# Fix permissions unconditionally — this build machine's files can end up
+# readable/executable only by the original owner (an exFAT external-drive
+# quirk), which pkgbuild ships as-is. After installation the payload is
+# owned by root, so anything less than world-readable/executable means the
+# bridge silently fails to launch with no error anywhere a user would see —
+# exactly what happened on 2026-08-29. Directories always get traverse+read;
+# files keep whatever execute bit they already had (X) but gain read for all.
+chmod -R u+rwX,go+rX "$PAYLOAD_ROOT"
 echo "       Payload staged at: $PAYLOAD_ROOT"
 
 # ── 5. Build component + distribution packages ────────────────────────────────

@@ -8,6 +8,20 @@ PLIST_PATH="/Users/$CURRENT_USER/Library/LaunchAgents/$PLIST_NAME.plist"
 
 if [ -f "$PLIST_PATH" ] && [ -n "$USER_UID" ]; then
     launchctl bootout "gui/$USER_UID/$PLIST_NAME" 2>/dev/null || true
+
+    # bootout returns as soon as launchd accepts the request — it does not
+    # wait for the old process to actually exit and release its socket. If
+    # postinstall bootstraps the new service before that happens, the new
+    # bridge fails to bind port 8766 ("Address already in use") and dies on
+    # the very first launch, with the installer otherwise reporting success.
+    # This isn't just a one-off — it'll happen on every future upgrade unless
+    # we actually wait here.
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if ! lsof -i :8766 -sTCP:LISTEN >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.5
+    done
 fi
 
 exit 0

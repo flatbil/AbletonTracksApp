@@ -75,10 +75,32 @@ chmod 644 "$PLIST_PATH"
 # ── Load the agent now (no logout required) ───────────────────────────────────
 launchctl bootstrap "gui/$USER_UID" "$PLIST_PATH" 2>/dev/null || true
 
-echo "Bridge service installed and started."
+# ── Verify the bridge actually started ────────────────────────────────────────
+# Installer.app happily reports "Installation Complete" even when the payload
+# is broken and the service never comes up (exactly what happened when this
+# payload's file permissions were wrong — nothing anywhere told the user).
+# Wait briefly, then actually check, and surface a real, actionable message
+# if it didn't come up instead of silently succeeding.
+echo "Verifying the bridge started..."
+BRIDGE_OK=0
+for i in 1 2 3 4 5 6; do
+    sleep 1
+    if curl -s -m 2 http://localhost:8766/health 2>/dev/null | grep -q '"status":"ok"'; then
+        BRIDGE_OK=1
+        break
+    fi
+done
+
+if [ "$BRIDGE_OK" = "1" ]; then
+    echo "Bridge service installed and confirmed running."
+else
+    echo "WARNING: Bridge did not respond after installation. Check $LOG_DIR/bridge.log" >&2
+    sudo -u "$CURRENT_USER" osascript -e 'display dialog "MD Buddy Bridge installed, but the background service did not start correctly.\n\nOpen this file to see what went wrong:\n~/Library/Logs/MDBuddyBridge/bridge.log\n\nOr visit the Troubleshooting page:\ngithub.com/flatbil/AbletonTracksApp/wiki/Troubleshooting" with title "MD Buddy Bridge - Setup Issue" buttons {"OK"} default button "OK" with icon caution' 2>/dev/null || true
+fi
+
 echo "Logs: $LOG_DIR/bridge.log"
 echo ""
-echo "Next: open Ableton Live → Preferences → Link/Tempo/MIDI → Control Surface"
-echo "      and select 'AbletonOSC' in one of the slots."
+echo "Next: open Ableton Live, go to Preferences -> Link/Tempo/MIDI -> Control Surface"
+echo "      and select AbletonOSC in one of the slots."
 
 exit 0

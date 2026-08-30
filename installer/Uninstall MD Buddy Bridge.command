@@ -8,9 +8,9 @@ LOG_DIR="$HOME/Library/Logs/MDBuddyBridge"
 BRIDGE_APP="/Library/Application Support/MDBuddyBridge"
 ABLETON_OSC="$HOME/Music/Ableton/User Library/Remote Scripts/AbletonOSC"
 
-echo "╔════════════════════════════════════════╗"
-echo "║   MD Buddy Bridge Uninstaller          ║"
-echo "╚════════════════════════════════════════╝"
+echo "=========================================="
+echo "   MD Buddy Bridge Uninstaller"
+echo "=========================================="
 echo ""
 
 # ── Stop the running service ──────────────────────────────────────────────────
@@ -47,12 +47,12 @@ if [ -d "$ABLETON_OSC" ]; then
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         rm -rf "$ABLETON_OSC"
         echo "Removed: AbletonOSC remote script"
-        echo "Remember to remove it from Ableton Preferences → Control Surfaces."
+        echo "Remember to remove it from Ableton Preferences -> Control Surfaces."
     fi
 fi
 
 echo ""
-echo "✓ MD Buddy Bridge has been uninstalled."
+echo "MD Buddy Bridge has been uninstalled."
 echo ""
 echo "Press any key to close..."
 read -r -n 1
