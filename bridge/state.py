@@ -18,6 +18,11 @@ class AppState:
     time_signature_numerator: int = 4
     cue_count: int = 0
     cue_warning: bool = False
+    # Whether Ableton has responded to anything within the watchdog's timeout
+    # window (see AbletonBridge._watchdog). Starts True so a normal startup
+    # doesn't flash a false "disconnected" warning before the first response
+    # has had a chance to arrive.
+    ableton_connected: bool = True
 
     def position_snapshot(self) -> dict:
         """Lightweight message sent ~every beat."""
@@ -29,6 +34,7 @@ class AppState:
             "current_section_index": self.current_section_index,
             "tempo": self.tempo,
             "time_signature_numerator": self.time_signature_numerator,
+            "ableton_connected": self.ableton_connected,
         }
 
     def tracks_snapshot(self) -> dict:
@@ -49,4 +55,5 @@ class AppState:
             "time_signature_numerator": self.time_signature_numerator,
             "cue_count": self.cue_count,
             "cue_warning": self.cue_warning,
+            "ableton_connected": self.ableton_connected,
         }

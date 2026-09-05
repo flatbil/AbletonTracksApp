@@ -9,6 +9,7 @@ AbletonOSC defaults:
 import asyncio
 import logging
 import socket
+import time
 from typing import Callable
 
 from pythonosc.osc_message import OscMessage, ParseError
@@ -26,6 +27,20 @@ RECV_PORT = 11001   # we listen here for responses (AbletonOSC default response 
 CUE_POLL_INTERVAL = 1.0  # seconds between cue point polls
 CUE_POINT_WARNING_THRESHOLD = 500  # warn when raw cue count approaches OSC buffer limits
 
+# Ableton talks to us over UDP, which has no concept of "disconnected" — if
+# Ableton quits or crashes, our socket just goes quiet with no error at all.
+# Left undetected, a stale is_playing=True sits there forever and the iPad's
+# client-side dead-reckoning (BridgeService.scheduleAutoAdvance) keeps marching
+# through the whole setlist on a fake clock, showing confident progress while
+# Ableton isn't running (observed 2026-08-30: Ableton was shut down mid-set and
+# the iPad kept auto-advancing song to song regardless).
+# WATCHDOG_INTERVAL sets how often we check; ABLETON_TIMEOUT is how long we'll
+# go without hearing anything from Ableton before calling it gone. The cue
+# poll below fires every CUE_POLL_INTERVAL regardless of play state, so this
+# only needs a small multiple of that to avoid false positives from jitter.
+WATCHDOG_INTERVAL = 1.0
+ABLETON_TIMEOUT = 6.0
+
 
 class _OSCProtocol(asyncio.DatagramProtocol):
     """Minimal asyncio UDP protocol that dispatches OSC messages directly."""
@@ -34,6 +49,11 @@ class _OSCProtocol(asyncio.DatagramProtocol):
         self._bridge = bridge
 
     def datagram_received(self, data: bytes, addr):
+        # Any datagram at all on this socket can only be from Ableton (it's
+        # bound to loopback on a port nothing else talks to) — mark liveness
+        # before even trying to parse it, so a burst of unparseable noise
+        # still counts as "Ableton is alive," not just recognized messages.
+        self._bridge._last_received = time.monotonic()
         try:
             if OscBundle.dgram_is_bundle(data):
                 bundle = OscBundle(data)
@@ -78,6 +98,8 @@ class AbletonBridge:
         self._client = SimpleUDPClient(ABLETON_HOST, SEND_PORT)
         self._transport = None
         self._poll_task = None
+        self._watchdog_task = None
+        self._last_received = time.monotonic()  # bumped on every datagram from Ableton
         self._last_raw_cues: list = []  # used to detect cue point changes
         self._last_section: tuple[int, int] = (-1, -1)  # for instant section-change detection
         self._pending_clip_path = None   # asyncio.Future, set during analyze_guide_track
@@ -118,15 +140,36 @@ class AbletonBridge:
 
         # Start background cue point poll
         self._poll_task = asyncio.get_event_loop().create_task(self._poll_cue_points())
+        self._watchdog_task = asyncio.get_event_loop().create_task(self._watchdog())
 
     def stop(self):
         if self._poll_task:
             self._poll_task.cancel()
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
         if self._transport:
             self._client.send_message("/live/song/stop_listen/beat", [])
             self._client.send_message("/live/song/stop_listen/current_song_time", [])
             self._client.send_message("/live/song/stop_listen/signature_numerator", [])
             self._transport.close()
+
+    async def _watchdog(self):
+        """Detect Ableton going silent (quit/crash) and tell every connected
+        device before the iPad's local dead-reckoning can march on unaware.
+        Self-heals the same way: as soon as datagrams resume, the next tick
+        flips ableton_connected back and broadcasts the recovery."""
+        while True:
+            await asyncio.sleep(WATCHDOG_INTERVAL)
+            connected_now = (time.monotonic() - self._last_received) < ABLETON_TIMEOUT
+            if connected_now != self._state.ableton_connected:
+                self._state.ableton_connected = connected_now
+                if not connected_now:
+                    # Don't let a stale "playing" survive Ableton disappearing —
+                    # that's exactly what let the iPad keep auto-advancing songs
+                    # against a transport that no longer exists.
+                    self._state.is_playing = False
+                log.info("Ableton connection %s", "restored" if connected_now else "lost — no response in %.0fs" % ABLETON_TIMEOUT)
+                self._on_state_change()
 
     async def _poll_cue_points(self):
         """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds.
