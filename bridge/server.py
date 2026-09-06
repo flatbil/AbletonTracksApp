@@ -22,6 +22,13 @@ WebSocket protocol (all messages are JSON):
       "role": "primary" | "observer"}, ...] }   ← whenever a device connects,
       disconnects, or registers a name — the "who's connected" list
 
+    { "type": "jump_queued", "song_index": int, "section_index": int,
+      "launch_beat": float }   ← sent to every device (primary and observers
+      alike) the instant a jump is requested, before Ableton confirms it —
+      launch_beat is the absolute beat position (1-bar-quantized) the jump
+      will actually land on, so every screen can show the same count-in
+      instead of an ambiguous "queued" flash with no sense of how long it'll be.
+
   Client → Server:
     { "type": "jump",      "song_index": int, "section_index": int }   ← primary only
     { "type": "transport", "action": "play" | "stop" }                 ← primary only
@@ -33,6 +40,7 @@ WebSocket protocol (all messages are JSON):
 import asyncio
 import json
 import logging
+import math
 import uuid
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -289,7 +297,7 @@ async def websocket_endpoint(ws: WebSocket):
             if msg_type == "jump":
                 song_idx = msg.get("song_index", -1)
                 sec_idx = msg.get("section_index", -1)
-                _handle_jump(song_idx, sec_idx)
+                await _handle_jump(song_idx, sec_idx)
 
             elif msg_type == "mute_track":
                 track_idx = msg.get("track_index", -1)
@@ -340,7 +348,7 @@ async def websocket_endpoint(ws: WebSocket):
         await manager.broadcast_roster()
 
 
-def _handle_jump(song_idx: int, section_idx: int):
+async def _handle_jump(song_idx: int, section_idx: int):
     try:
         section = _state.songs[song_idx]["sections"][section_idx]
         cue_index = int(section["cue_index"])
@@ -348,9 +356,27 @@ def _handle_jump(song_idx: int, section_idx: int):
         log.error("Jump failed: %s", e)
         return
 
+    # Ableton's launch quantization is 1 bar — compute the beat this jump will
+    # actually land on and broadcast it to every device (primary AND observers)
+    # before Ableton even confirms it, so everyone sees the same count-in
+    # instead of an ambiguous "queued" flash with no sense of how long it'll
+    # be. current_position is the bridge's own last-known beat, same ground
+    # truth every client already anchors its own progress display to.
+    beats_per_bar = _state.time_signature_numerator or 4
+    launch_beat = (math.floor(_state.current_position / beats_per_bar) + 1) * beats_per_bar
+    _state.queued_song_index = song_idx
+    _state.queued_section_index = section_idx
+    _state.queued_launch_beat = launch_beat
+    await manager.broadcast({
+        "type": "jump_queued",
+        "song_index": song_idx,
+        "section_index": section_idx,
+        "launch_beat": launch_beat,
+    })
+
     # Send the jump directly — Ableton's own launch quantization handles bar-
     # boundary timing. A bridge-side sleep caused double-quantization (bridge
     # waits for bar, then Ableton also waits for bar), making jumps fire 2 bars
     # late and leaving the iOS progress bar frozen the whole time.
-    log.info("Jumping to cue %d (song=%d section=%d)", cue_index, song_idx, section_idx)
+    log.info("Jumping to cue %d (song=%d section=%d), landing at beat %.2f", cue_index, song_idx, section_idx, launch_beat)
     _ableton.jump_to_cue_index(cue_index)

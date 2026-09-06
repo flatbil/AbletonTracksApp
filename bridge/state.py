@@ -3,6 +3,11 @@ Shared live state. A single instance is passed between the Ableton
 bridge and the WebSocket server so both can read/write it.
 """
 
+# Needed for `float | None` as a dataclass field annotation — that syntax
+# isn't valid at runtime before Python 3.10, and the field is evaluated
+# eagerly at class-definition time unlike a local-variable annotation.
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 
@@ -23,6 +28,14 @@ class AppState:
     # doesn't flash a false "disconnected" warning before the first response
     # has had a chance to arrive.
     ableton_connected: bool = True
+    # A jump in flight — set by server._handle_jump when a tap arrives, cleared
+    # by AbletonBridge._handle_beat once the section actually lands there.
+    # Only meaningful for a device reconnecting mid-quantization-window and
+    # picking up full_snapshot(); every already-connected device gets this from
+    # the "jump_queued" broadcast the moment the tap arrives, not from here.
+    queued_song_index: int = -1
+    queued_section_index: int = -1
+    queued_launch_beat: float | None = None
 
     def position_snapshot(self) -> dict:
         """Lightweight message sent ~every beat."""
@@ -56,4 +69,7 @@ class AppState:
             "cue_count": self.cue_count,
             "cue_warning": self.cue_warning,
             "ableton_connected": self.ableton_connected,
+            "queued_song_index": self.queued_song_index,
+            "queued_section_index": self.queued_section_index,
+            "queued_launch_beat": self.queued_launch_beat,
         }

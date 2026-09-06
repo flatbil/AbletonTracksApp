@@ -376,6 +376,18 @@ class AbletonBridge:
         self._state.current_song_index = s_idx
         self._state.current_section_index = sc_idx
 
+        # The queued jump landed — clear it so a device reconnecting right after
+        # doesn't pick up a stale count-in from full_snapshot(). Already-connected
+        # devices clear their own copy the same way (comparing confirmed indices
+        # against what they were counting into), so this is reconnect hygiene,
+        # not the thing that actually stops anyone's countdown.
+        if (self._state.queued_song_index != -1
+                and s_idx == self._state.queued_song_index
+                and sc_idx == self._state.queued_section_index):
+            self._state.queued_song_index = -1
+            self._state.queued_section_index = -1
+            self._state.queued_launch_beat = None
+
         section_changed = (s_idx, sc_idx) != self._last_section
         is_beat_boundary = address == "/live/song/get/beat"
 
