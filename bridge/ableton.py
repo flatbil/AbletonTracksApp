@@ -41,6 +41,13 @@ CUE_POINT_WARNING_THRESHOLD = 500  # warn when raw cue count approaches OSC buff
 WATCHDOG_INTERVAL = 1.0
 ABLETON_TIMEOUT = 6.0
 
+# Live's own meter ballistics update well over 10Hz per track, and every
+# listener fires independently — broadcasting each one straight to the
+# WebSocket would flood it for no perceptible benefit (a channel-strip meter
+# doesn't need to be smoother than the eye can follow). 10Hz reads as
+# perfectly live while keeping the wire traffic trivial regardless of track count.
+METER_BROADCAST_INTERVAL = 0.1
+
 
 class _OSCProtocol(asyncio.DatagramProtocol):
     """Minimal asyncio UDP protocol that dispatches OSC messages directly."""
@@ -77,6 +84,8 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_track_names(address, *params)
         elif address == "/live/track/get/mute":
             self._bridge._handle_track_mute(address, *params)
+        elif address == "/live/track/get/output_meter_level":
+            self._bridge._handle_track_meter(address, *params)
         elif address == "/live/song/get/is_playing":
             self._bridge._handle_is_playing(address, *params)
         elif address == "/live/song/get/tempo":
@@ -89,16 +98,20 @@ class _OSCProtocol(asyncio.DatagramProtocol):
 
 class AbletonBridge:
     def __init__(self, state: AppState, on_position_update: Callable,
-                 on_state_change: Callable, on_tracks_change: Callable):
+                 on_state_change: Callable, on_tracks_change: Callable,
+                 on_meter_update: Callable):
         self._state = state
         self._on_position_update = on_position_update  # called on every beat update
         self._on_state_change = on_state_change        # called when markers change
         self._on_tracks_change = on_tracks_change      # called when track mute state changes
+        self._on_meter_update = on_meter_update         # called on the throttled meter cadence
 
         self._client = SimpleUDPClient(ABLETON_HOST, SEND_PORT)
         self._transport = None
         self._poll_task = None
         self._watchdog_task = None
+        self._meter_task = None
+        self._last_broadcast_meters: dict[int, float] = {}
         self._last_received = time.monotonic()  # bumped on every datagram from Ableton
         self._last_raw_cues: list = []  # used to detect cue point changes
         self._last_section: tuple[int, int] = (-1, -1)  # for instant section-change detection
@@ -133,6 +146,12 @@ class AbletonBridge:
         self._client.send_message("/live/song/start_listen/tempo", [])
         self._client.send_message("/live/song/start_listen/is_playing", [])
         self._client.send_message("/live/song/start_listen/signature_numerator", [])
+        # Subscribe every track's live output level in one call — AbletonOSC
+        # expands "*" into one listener per track. Each fires on its own,
+        # independent of the beat/position listeners above, at whatever rate
+        # Live's own meter ballistics update (well over 10Hz) — the throttled
+        # broadcast loop below is what keeps that off the wire at full rate.
+        self._client.send_message("/live/track/start_listen/output_meter_level", ["*"])
 
         # Pull initial state
         self.refresh()
@@ -141,16 +160,20 @@ class AbletonBridge:
         # Start background cue point poll
         self._poll_task = asyncio.get_event_loop().create_task(self._poll_cue_points())
         self._watchdog_task = asyncio.get_event_loop().create_task(self._watchdog())
+        self._meter_task = asyncio.get_event_loop().create_task(self._broadcast_meters())
 
     def stop(self):
         if self._poll_task:
             self._poll_task.cancel()
         if self._watchdog_task:
             self._watchdog_task.cancel()
+        if self._meter_task:
+            self._meter_task.cancel()
         if self._transport:
             self._client.send_message("/live/song/stop_listen/beat", [])
             self._client.send_message("/live/song/stop_listen/current_song_time", [])
             self._client.send_message("/live/song/stop_listen/signature_numerator", [])
+            self._client.send_message("/live/track/stop_listen/output_meter_level", ["*"])
             self._transport.close()
 
     async def _watchdog(self):
@@ -170,6 +193,20 @@ class AbletonBridge:
                     self._state.is_playing = False
                 log.info("Ableton connection %s", "restored" if connected_now else "lost — no response in %.0fs" % ABLETON_TIMEOUT)
                 self._on_state_change()
+
+    async def _broadcast_meters(self):
+        """Push track_meters out at a fixed, gentle cadence instead of on
+        every individual listener callback (see METER_BROADCAST_INTERVAL).
+        Skips the broadcast entirely when nothing's changed since the last
+        one — silence during a count-off or between songs shouldn't mean
+        continuous identical traffic — but still sends the one transition
+        broadcast when levels drop to zero, so the UI doesn't hold a stale
+        reading forever once the audio actually stops."""
+        while True:
+            await asyncio.sleep(METER_BROADCAST_INTERVAL)
+            if self._state.track_meters != self._last_broadcast_meters:
+                self._last_broadcast_meters = dict(self._state.track_meters)
+                self._on_meter_update()
 
     async def _poll_cue_points(self):
         """Poll Ableton for cue point changes every CUE_POLL_INTERVAL seconds.
@@ -435,6 +472,18 @@ class AbletonBridge:
         # gives us the real initial state; subsequent ones fire on any change.
         for i in range(len(names)):
             self._client.send_message("/live/track/start_listen/mute", [i])
+        # Re-subscribe meters too — AbletonOSC expands "*" into per-track
+        # listeners once, at the moment it's sent, so a track added after our
+        # very first subscription (in start()) would otherwise never get one.
+        # Re-sending here on every track-list refresh (renames, reorders, a
+        # set reload) is what actually keeps every current track metered —
+        # AbletonOSC's start_listen is idempotent, so this is safe to repeat.
+        self._client.send_message("/live/track/start_listen/output_meter_level", ["*"])
+        # Drop meter readings for tracks that no longer exist rather than
+        # letting them sit stale forever.
+        self._state.track_meters = {
+            i: level for i, level in self._state.track_meters.items() if i < len(names)
+        }
 
     def _handle_track_mute(self, address, *args):
         """Handle a per-track mute update from a start_listen subscription.
@@ -447,4 +496,15 @@ class AbletonBridge:
                 track["muted"] = muted
                 self._on_tracks_change()
                 return
+
+    def _handle_track_meter(self, address, *args):
+        """Handle a per-track output-level update from a start_listen
+        subscription. Args arrive as (track_id, level) — level is Live's own
+        0.0-1.0 meter reading. Just records it; _broadcast_meters is what
+        actually pushes it out, on its own throttled cadence rather than on
+        every one of these (which fire well over 10 times a second)."""
+        if len(args) != 2:
+            return
+        track_id, level = int(args[0]), float(args[1])
+        self._state.track_meters[track_id] = round(level, 3)
 

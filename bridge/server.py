@@ -29,6 +29,11 @@ WebSocket protocol (all messages are JSON):
       will actually land on, so every screen can show the same count-in
       instead of an ambiguous "queued" flash with no sense of how long it'll be.
 
+    { "type": "meters", "levels": {"<track_index>": float, ...} }   ← live
+      per-track output level (0.0-1.0), on its own ~10Hz cadence. A track
+      absent from this dict simply hasn't reported yet (nothing has played
+      through it since it was subscribed) — treat that the same as 0.0.
+
   Client → Server:
     { "type": "jump",      "song_index": int, "section_index": int }   ← primary only
     { "type": "transport", "action": "play" | "stop" }                 ← primary only
@@ -187,6 +192,12 @@ def on_position_update():
 def on_tracks_change():
     asyncio.get_event_loop().create_task(
         manager.broadcast(_state.tracks_snapshot())
+    )
+
+
+def on_meter_update():
+    asyncio.get_event_loop().create_task(
+        manager.broadcast(_state.meters_snapshot())
     )
 
 

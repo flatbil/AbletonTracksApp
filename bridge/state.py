@@ -36,6 +36,11 @@ class AppState:
     queued_song_index: int = -1
     queued_section_index: int = -1
     queued_launch_beat: float | None = None
+    # Live per-track output level (0.0-1.0), keyed by track index. Updates
+    # far more often than anything else in this class — broadcast on its own
+    # throttled cadence (see AbletonBridge._broadcast_meters), never bundled
+    # into full_snapshot/position_snapshot.
+    track_meters: dict[int, float] = field(default_factory=dict)
 
     def position_snapshot(self) -> dict:
         """Lightweight message sent ~every beat."""
@@ -53,6 +58,10 @@ class AppState:
     def tracks_snapshot(self) -> dict:
         """Lightweight message sent when track mute state changes."""
         return {"type": "tracks", "tracks": self.tracks}
+
+    def meters_snapshot(self) -> dict:
+        """Live per-track output levels — sent on its own throttled cadence."""
+        return {"type": "meters", "levels": self.track_meters}
 
     def full_snapshot(self) -> dict:
         """Complete state — sent on connect or when markers change."""

@@ -20,7 +20,7 @@ from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
 from bridge.ableton import AbletonBridge
-from bridge.server import app, init, on_position_update, on_state_change, on_tracks_change
+from bridge.server import app, init, on_position_update, on_state_change, on_tracks_change, on_meter_update
 from bridge.state import AppState
 
 logging.basicConfig(
@@ -97,6 +97,7 @@ async def run():
         on_position_update=on_position_update,
         on_state_change=on_state_change,
         on_tracks_change=on_tracks_change,
+        on_meter_update=on_meter_update,
     )
     init(state, ableton)
 
