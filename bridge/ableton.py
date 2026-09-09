@@ -206,10 +206,24 @@ class AbletonBridge:
         traffic), but still sending the one transition broadcast when levels
         drop to zero, so the UI doesn't hold a stale reading forever once the
         audio actually stops."""
+        debug_tick = 0
         while True:
             await asyncio.sleep(METER_POLL_INTERVAL)
-            for i in range(len(self._state.tracks)):
+            track_count = len(self._state.tracks)
+            for i in range(track_count):
                 self._client.send_message("/live/track/get/output_meter_level", [i])
+
+            # Temporary diagnostic — a summary every ~2s rather than every
+            # 100ms poll, so this stays readable in the log instead of
+            # flooding it. Shows exactly what to look for when this doesn't
+            # seem to be working: track_count=0 means fetch_tracks() hasn't
+            # actually populated tracks yet (nothing gets polled at all);
+            # meters={} despite a nonzero track_count with audio genuinely
+            # playing means responses aren't coming back from Ableton/AbletonOSC.
+            debug_tick += 1
+            if debug_tick % 20 == 0:
+                log.info("Meter poll: track_count=%d meters=%s", track_count, self._state.track_meters)
+
             if self._state.track_meters != self._last_broadcast_meters:
                 self._last_broadcast_meters = dict(self._state.track_meters)
                 self._on_meter_update()
