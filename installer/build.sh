@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 # on PATH by default.
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 
-VERSION="1.1"
+VERSION="1.2"
 IDENTIFIER="com.nuthouse.stagepad-bridge"
 # On internal (APFS) storage, NOT under $SCRIPT_DIR — the repo lives on the
 # T7 Shield external drive, which is exFAT. exFAT has no concept of Unix
