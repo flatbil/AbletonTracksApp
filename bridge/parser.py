@@ -24,9 +24,19 @@ SONG_START_KEYWORDS = {
     "inizio",                   # Italian
 }
 
+# A section named exactly "Loop" (any case) vamps in place — see
+# AbletonBridge.set_loop_region. Kept to one literal keyword, same style as
+# SONG_START_KEYWORDS, rather than a prefix match, so a section legitimately
+# named "Loop Pedal" or similar in someone's existing set isn't misread.
+LOOP_SECTION_KEYWORD = "loop"
+
 
 def _is_song_start(name: str) -> bool:
     return name.strip().lower() in SONG_START_KEYWORDS
+
+
+def _is_loop_section(name: str) -> bool:
+    return name.strip().lower() == LOOP_SECTION_KEYWORD
 
 
 def parse_markers(cue_points: list[dict]) -> list[dict]:
@@ -77,7 +87,7 @@ def parse_markers(cue_points: list[dict]) -> list[dict]:
             current_song = {
                 "name": match.group(1),
                 "position": position,
-                "sections": [{"name": "Start", "position": position, "cue_index": cue_index}],
+                "sections": [{"name": "Start", "position": position, "cue_index": cue_index, "is_loop": False}],
             }
             songs.append(current_song)
         elif _is_song_start(name):
@@ -87,13 +97,32 @@ def parse_markers(cue_points: list[dict]) -> list[dict]:
             current_song = {
                 "name": f"Song {song_number}",
                 "position": position,
-                "sections": [{"name": name, "position": position, "cue_index": cue_index}],
+                "sections": [{"name": name, "position": position, "cue_index": cue_index, "is_loop": False}],
             }
             songs.append(current_song)
         elif current_song is not None:
-            current_song["sections"].append({"name": name, "position": position, "cue_index": cue_index})
+            current_song["sections"].append({
+                "name": name,
+                "position": position,
+                "cue_index": cue_index,
+                "is_loop": _is_loop_section(name),
+            })
 
+    _annotate_section_lengths(songs)
     return songs
+
+
+def _annotate_section_lengths(songs: list[dict]) -> None:
+    """Fill in each section's "length" (beats until the next marker anywhere
+    in the set, song boundaries included) — needed to bound a Loop section's
+    Ableton Arrangement Loop region. The very last section in the whole set
+    has no next marker to measure to, so it's left as None and can't loop
+    (nothing to bound the region against)."""
+    flat: list[dict] = [section for song in songs for section in song["sections"]]
+    for this_section, next_section in zip(flat, flat[1:]):
+        this_section["length"] = next_section["position"] - this_section["position"]
+    if flat:
+        flat[-1]["length"] = None
 
 
 def find_current_indices(songs: list[dict], position: float) -> tuple[int, int]:

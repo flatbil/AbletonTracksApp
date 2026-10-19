@@ -27,6 +27,11 @@ RECV_PORT = 11001   # we listen here for responses (AbletonOSC default response 
 CUE_POLL_INTERVAL = 1.0  # seconds between cue point polls
 CUE_POINT_WARNING_THRESHOLD = 500  # warn when raw cue count approaches OSC buffer limits
 
+# A dedicated Session View track, distinct from the Arrangement "Cues" track
+# generate_cues_from_track reads — that one auto-creates locators, this one
+# holds the opt-in one-shot pickups server.py fires for Cue Clip sections.
+CUE_CLIPS_TRACK_NAME = "Cue Clips"
+
 # Ableton talks to us over UDP, which has no concept of "disconnected" — if
 # Ableton quits or crashes, our socket just goes quiet with no error at all.
 # Left undetected, a stale is_playing=True sits there forever and the iPad's
@@ -86,6 +91,8 @@ class _OSCProtocol(asyncio.DatagramProtocol):
             self._bridge._handle_beat(address, *params)
         elif address == "/live/song/get/track_names":
             self._bridge._handle_track_names(address, *params)
+        elif address == "/live/track/get/clips/name":
+            self._bridge._handle_cue_clip_names(address, *params)
         elif address == "/live/track/get/mute":
             self._bridge._handle_track_mute(address, *params)
         elif address == "/live/track/get/output_meter_level":
@@ -122,6 +129,17 @@ class AbletonBridge:
         self._pending_clip_path = None   # asyncio.Future, set during analyze_guide_track
         self._pending_cue_points = None  # asyncio.Future, set during apply_analysis
 
+        # Cue Clips (opt-in section pickups) — see CUE_CLIPS_TRACK_NAME.
+        self._cue_clips_track_index: int | None = None
+        self._cue_clip_index_by_name: dict[str, int] = {}
+        # Set by server._handle_jump for a Cue Clip section instead of calling
+        # jump_to_cue_index: wait for playback to reach launch_beat (the same
+        # next-bar boundary a normal jump would also wait for), then snap
+        # straight to target_beat. Skips exactly the composed pre-roll fill
+        # that only makes musical sense arriving at in order, not via a jump.
+        self._pending_retarget_beat: float | None = None
+        self._pending_retarget_target: float | None = None
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -152,6 +170,13 @@ class AbletonBridge:
         self._client.send_message("/live/song/start_listen/signature_numerator", [])
         # Track meters are actively polled, not listened to — see
         # METER_POLL_INTERVAL for why start_listen isn't reliable here.
+
+        # Start with no Arrangement Loop engaged — otherwise a loop left on
+        # from manual use in a previous session would make the very first
+        # "Loop" section tap look like it did nothing (loop was already on,
+        # just bound to the wrong region) and could even trap playback inside
+        # whatever region Live happened to have active on launch.
+        self.disable_loop()
 
         # Pull initial state
         self.refresh()
@@ -270,6 +295,50 @@ class AbletonBridge:
     def jump_to_cue_index(self, index: int):
         """Jump to a cue point by index — unambiguous and respects launch quantization."""
         self._client.send_message("/live/song/cue_point/jump", index)
+
+    def set_loop_region(self, start_beat: float, length_beats: float):
+        """Bind Ableton's native Arrangement Loop to exactly one section, so a
+        "Loop" section vamps with Live's own sample-accurate loop engine —
+        the same mechanism Cmd+L sets, just driven over OSC instead of needing
+        keyboard focus on Live's own window (which this app can never assume).
+        Set the region before enabling it so there's no gap where loop=1
+        briefly applies to Live's previous region."""
+        self._client.send_message("/live/song/set/loop_start", [start_beat])
+        self._client.send_message("/live/song/set/loop_length", [length_beats])
+        self._client.send_message("/live/song/set/loop", [1])
+
+    def disable_loop(self):
+        """Release the Arrangement Loop — called on every jump to a non-Loop
+        section so a previous Loop section's vamp can't hold playback."""
+        self._client.send_message("/live/song/set/loop", [0])
+
+    def fire_cue_clip_for_section(self, section_name: str) -> bool:
+        """Fire the Session View clip in the Cue Clips track whose name
+        matches this section, if one has been set up. Returns False (doing
+        nothing) when there's no match, so callers fall back to a normal
+        marker jump — this feature is opt-in per section, never automatic.
+        Each such clip must have its own Launch Quantization set to None in
+        Ableton so it starts the instant this fires, ahead of the retargeted
+        jump below rather than snapping to the same bar boundary as it."""
+        if self._cue_clips_track_index is None:
+            return False
+        clip_index = self._cue_clip_index_by_name.get(section_name.strip().lower())
+        if clip_index is None:
+            return False
+        self._client.send_message("/live/clip_slot/fire", [self._cue_clips_track_index, clip_index])
+        return True
+
+    def schedule_downbeat_retarget(self, launch_beat: float, target_beat: float):
+        """Used only for a Cue Clip section jump, instead of jump_to_cue_index:
+        wait for playback to reach launch_beat, then snap straight to
+        target_beat. Whatever's currently playing just continues uninterrupted
+        until that moment — nothing is muted, nothing has to go silent."""
+        self._pending_retarget_beat = launch_beat
+        self._pending_retarget_target = target_beat
+
+    def clear_pending_retarget(self):
+        self._pending_retarget_beat = None
+        self._pending_retarget_target = None
 
     async def generate_cues_from_track(self, track_name: str = "Cues"):
         """Ask Ableton to create cue points from arrangement clips on track_name,
@@ -429,6 +498,19 @@ class AbletonBridge:
             log.info("Position jumped back (%.2f → %.2f) — clearing cue cache for set reload", self._state.current_position, new_position)
             self._last_raw_cues = []
         self._state.current_position = new_position
+
+        # Cue Clip retarget pending (see schedule_downbeat_retarget): the
+        # moment playback reaches the bar boundary a normal jump would also
+        # have waited for, snap straight to the true downbeat instead of
+        # continuing into the skipped pre-roll bar.
+        if (self._pending_retarget_beat is not None
+                and new_position >= self._pending_retarget_beat):
+            target = self._pending_retarget_target
+            self._pending_retarget_beat = None
+            self._pending_retarget_target = None
+            log.info("Cue Clip retarget: snapping to true downbeat at beat %.2f", target)
+            self._client.send_message("/live/song/set/current_song_time", [target])
+
         s_idx, sc_idx = find_current_indices(self._state.songs, self._state.current_position)
         self._state.current_song_index = s_idx
         self._state.current_section_index = sc_idx
@@ -488,6 +570,18 @@ class AbletonBridge:
             for i, name in enumerate(names)
         ]
         self._on_tracks_change()
+
+        # Re-find the Cue Clips track (see CUE_CLIPS_TRACK_NAME) every time the
+        # track list changes — index shifts if tracks are added/removed/reordered.
+        cue_track_index = next(
+            (i for i, name in enumerate(names) if name.strip().lower() == CUE_CLIPS_TRACK_NAME.lower()),
+            None,
+        )
+        if cue_track_index != self._cue_clips_track_index:
+            self._cue_clips_track_index = cue_track_index
+            self._cue_clip_index_by_name = {}
+            if cue_track_index is not None:
+                self._client.send_message("/live/track/get/clips/name", [cue_track_index])
         # Subscribe to live mute updates for every track. The first notification
         # gives us the real initial state; subsequent ones fire on any change.
         for i in range(len(names)):
@@ -512,6 +606,23 @@ class AbletonBridge:
                 track["muted"] = muted
                 self._on_tracks_change()
                 return
+
+    def _handle_cue_clip_names(self, address, *args):
+        """Response to /live/track/get/clips/name — args are
+        (track_index, name0, name1, ...), None for an empty slot. Builds the
+        name → clip-index map fire_cue_clip_for_section looks up."""
+        if not args:
+            return
+        track_index = int(args[0])
+        if track_index != self._cue_clips_track_index:
+            return  # stale response for a track we no longer care about
+        self._cue_clip_index_by_name = {
+            str(name).strip().lower(): i
+            for i, name in enumerate(args[1:])
+            if name is not None
+        }
+        log.info("Cue Clips track (index %d): mapped %d named clips",
+                 track_index, len(self._cue_clip_index_by_name))
 
     def _handle_track_meter(self, address, *args):
         """Handle the response to a polled output-level get request (see

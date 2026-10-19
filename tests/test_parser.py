@@ -160,3 +160,40 @@ class TestFindCurrentIndices:
 
     def test_second_song_verse(self):
         assert find_current_indices(self.songs, 45) == (1, 1)
+
+
+# ── Loop sections ────────────────────────────────────────────────────────────
+
+class TestLoopSections:
+    def test_loop_section_flagged(self):
+        songs = parse_markers(cues(
+            ("== Song A ==", 0),
+            ("Verse 1", 8),
+            ("Loop", 16),
+            ("== Song B ==", 24),
+        ))
+        sections = songs[0]["sections"]
+        assert [s["is_loop"] for s in sections] == [False, False, True]
+
+    def test_loop_name_is_case_insensitive(self):
+        songs = parse_markers(cues(("== Song A ==", 0), ("LOOP", 8), ("Outro", 16)))
+        assert songs[0]["sections"][1]["is_loop"] is True
+
+    def test_similarly_named_section_is_not_a_loop(self):
+        # "Loop Pedal" etc. must not be misread as the Loop keyword.
+        songs = parse_markers(cues(("== Song A ==", 0), ("Loop Pedal", 8)))
+        assert songs[0]["sections"][1]["is_loop"] is False
+
+    def test_section_length_measured_to_next_marker(self):
+        songs = parse_markers(cues(
+            ("== Song A ==", 0),
+            ("Verse 1", 8),
+            ("Loop", 16),
+            ("== Song B ==", 24),
+        ))
+        sections = songs[0]["sections"]
+        assert [s["length"] for s in sections] == [8.0, 8.0, 8.0]
+
+    def test_last_section_in_set_has_no_length(self):
+        songs = parse_markers(cues(("== Song A ==", 0), ("Loop", 8)))
+        assert songs[0]["sections"][-1]["length"] is None

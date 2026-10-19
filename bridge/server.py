@@ -693,6 +693,11 @@ async def websocket_endpoint(ws: WebSocket):
                     _state.queued_song_index = -1
                     _state.queued_section_index = -1
                     _state.queued_launch_beat = None
+                    # Same reasoning for a Cue Clip retarget queued right
+                    # before the stop — it would otherwise fire on whatever
+                    # beat playback happens to resume past, landing nowhere
+                    # near where the (now long gone) tap meant to go.
+                    _ableton.clear_pending_retarget()
 
             elif msg_type == "release_control":
                 await manager.release()
@@ -754,6 +759,18 @@ async def _handle_jump(song_idx: int, section_idx: int):
     _state.queued_song_index = song_idx
     _state.queued_section_index = section_idx
     _state.queued_launch_beat = launch_beat
+
+    # A section named "Loop" vamps via Ableton's own Arrangement Loop rather
+    # than this bridge re-sending jumps — bind (or release) that region before
+    # the quantized jump below so it's already in place the instant playback
+    # actually lands there. Always releases first: jumping away from a Loop
+    # section must not leave the old region still bound once this jump lands.
+    if section.get("is_loop") and section.get("length"):
+        log.info("Loop section: binding Arrangement Loop at beat %.2f for %.2f beats", section["position"], section["length"])
+        _ableton.set_loop_region(section["position"], section["length"])
+    else:
+        _ableton.disable_loop()
+
     await manager.broadcast({
         "type": "jump_queued",
         "song_index": song_idx,
@@ -761,9 +778,22 @@ async def _handle_jump(song_idx: int, section_idx: int):
         "launch_beat": launch_beat,
     })
 
+    # Cue Clips (opt-in, see Marker Reference): if this section has a matching
+    # one-shot in the Cue Clips Session track, fire it and retarget the jump
+    # straight to the true downbeat (one bar past the marker) instead of a
+    # normal marker jump — skipping exactly the composed pre-roll fill that
+    # only makes sense arriving at in order, not via a jump. No match means
+    # this section isn't opted in: behaves exactly as it always has.
+    if _ableton.fire_cue_clip_for_section(section["name"]):
+        true_downbeat = section["position"] + beats_per_bar
+        log.info("Cue Clip: firing one-shot for '%s', retargeting to true downbeat at beat %.2f", section["name"], true_downbeat)
+        _ableton.schedule_downbeat_retarget(launch_beat, true_downbeat)
+        return
+
     # Send the jump directly — Ableton's own launch quantization handles bar-
     # boundary timing. A bridge-side sleep caused double-quantization (bridge
     # waits for bar, then Ableton also waits for bar), making jumps fire 2 bars
     # late and leaving the iOS progress bar frozen the whole time.
+    _ableton.clear_pending_retarget()
     log.info("Jumping to cue %d (song=%d section=%d), landing at beat %.2f", cue_index, song_idx, section_idx, launch_beat)
     _ableton.jump_to_cue_index(cue_index)
